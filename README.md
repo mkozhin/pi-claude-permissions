@@ -2,23 +2,23 @@
 
 ![pi-claude-permissions gallery preview](./gallery.png)
 
-Claude-style permissions for [pi](https://pi.dev), with an opinionated small set of modes and built-in plan mode.
+Claude-style permissions for [pi](https://pi.dev), with configurable mode cycling and built-in plan mode.
 
-This is my personal favorite permission cycling setup: I find default/confirm-everything mode pointless, but I sometimes want to watch bash commands. Most of the time I run in `bypassPermissions`, or start work in `plan` mode and then let the agent execute once the plan looks good.
+This is my personal favorite permission cycling setup. Most of the time I run in `bypassPermissions`, or start work in `plan` mode and then let the agent execute once the plan looks good. If you prefer confirmation for everything, `default` mode is available too.
 
-This is heavily based on and inspired by [`rHedBull/pi-permissions`](https://github.com/rHedBull/pi-permissions). Big shoutout to rHedBull for the original Claude Code-style permission workflow and safety checks. This version stays close to the Claude-style permission experience, but is more opinionated: it only exposes the modes below, defaults to bypass, uses `Shift+Tab`, and adds plan mode.
+This is heavily based on and inspired by [`rHedBull/pi-permissions`](https://github.com/rHedBull/pi-permissions). Big shoutout to rHedBull for the original Claude Code-style permission workflow and safety checks. This version stays close to the Claude-style permission experience, defaults to bypass, uses `Shift+Tab`, supports `/permissions`, and adds plan mode.
 
 ## What is different?
 
-- **Only three modes**:
+- **Four modes**:
+  - `default`
   - `plan`
   - `acceptEdits`
   - `bypassPermissions`
-- **No `default` mode**.
 - **No `fullAuto` mode**.
-- **`bypassPermissions` is the default**.
-- **Mode switching is shortcut-only** with `Shift+Tab`.
-- **No `/permissions` commands**.
+- **`bypassPermissions` is the startup default**.
+- **Configurable `Shift+Tab` cycle**.
+- **`/permissions` always shows all modes** for manual selection.
 - Includes a custom **plan mode**.
 
 ## Installation
@@ -36,6 +36,14 @@ pi install git:github.com/zackify/pi-claude-permissions
 ```
 
 ## Modes
+
+### `default`
+
+Confirmation mode.
+
+- Prompts before every tool call.
+- Keeps session-level approvals for prompted operations.
+- Still blocks protected paths and catastrophic commands.
 
 ### `plan`
 
@@ -92,13 +100,15 @@ Plan mode ended. Execute the plan.
 - Still blocks catastrophic commands and protected paths.
 - This is the default mode.
 
-## Shortcut
+## Shortcut and command
 
-`Shift+Tab` cycles modes:
+By default, `Shift+Tab` cycles all modes:
 
 ```text
-plan → acceptEdits → bypassPermissions → plan
+default → plan → acceptEdits → bypassPermissions → default
 ```
+
+Use `/permissions` to manually select any mode at any time. If you rarely use one of the modes, set `piClaudePermissions.shiftTabOptions` to keep your `Shift+Tab` cycle faster; `/permissions` will still show all modes.
 
 ## Configuration
 
@@ -107,12 +117,18 @@ Set this in `~/.pi/agent/settings.json` or project-local `.pi/settings.json`:
 ```json
 {
   "piClaudePermissions": {
-    "allowCatastrophic": false
+    "defaultMode": "bypass",
+    "allowCatastrophic": false,
+    "shiftTabOptions": ["default", "plan", "acceptEdits", "bypass"]
   }
 }
 ```
 
+`defaultMode` controls the startup mode and defaults to `bypassPermissions`. Valid values are `default`, `plan`, `acceptEdits`, `bypassPermissions`, and the short alias `bypass`.
+
 `allowCatastrophic` defaults to `false`. When set to `true`, catastrophic command blocking and critical `rm -rf` detection are allowed. Protected path checks still run.
+
+`shiftTabOptions` defaults to all modes. Valid values are `default`, `plan`, `acceptEdits`, `bypassPermissions`, and the short alias `bypass`. This only changes the `Shift+Tab` cycle; `/permissions` still lists every mode.
 
 ## Safety checks kept from the inspiration plugin
 

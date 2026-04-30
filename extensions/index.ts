@@ -2,8 +2,8 @@
  * Opinionated Permissions + Plan Mode for pi
  *
  * Inspired by rHedBull/pi-permissions, trimmed down for this workflow:
- * - Shift+Tab cycles modes.
- * - Default mode is bypassPermissions.
+ * - Shift+Tab cycles configurable modes.
+ * - Default startup mode is bypassPermissions.
  * - Plan mode is read-only and injects planning instructions.
  * - Leaving plan mode for acceptEdits while idle asks the agent to execute.
  */
@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-type PermissionMode = "plan" | "acceptEdits" | "bypassPermissions";
+type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions";
 type Pattern = { pattern: string; description: string };
 type UiContext = {
   ui: any;
@@ -34,11 +34,15 @@ interface PermissionsConfig {
   catastrophicPatterns?: Pattern[];
   protectedPaths?: string[];
   allowCatastrophic?: boolean;
+  shiftTabOptions?: string[];
+  defaultMode?: string;
 }
 
 interface PiSettingsConfig {
   piClaudePermissions?: {
     allowCatastrophic?: boolean;
+    shiftTabOptions?: string[];
+    defaultMode?: string;
   };
 }
 
@@ -47,6 +51,7 @@ const PLAN_EXIT_PROMPT = "Plan mode ended. Execute the plan.";
 const PLAN_BLOCK_REASON = "You are in plan mode, you can only read files/search tools until the user exits plan mode.";
 
 const MODES: Array<{ id: PermissionMode; label: string; description: string; status: string }> = [
+  { id: "default", label: "Default", description: "Ask before write/edit/bash operations", status: "⏵" },
   { id: "plan", label: "Plan", description: "Read-only exploration; only read/search tools and safe bash", status: "⏸" },
   { id: "acceptEdits", label: "Accept Edits", description: "Allow write/edit silently, confirm bash", status: "⏵⏵" },
   { id: "bypassPermissions", label: "Bypass Permissions", description: "Allow everything except catastrophic/protected operations", status: "⏵⏵⏵⏵" },
@@ -127,7 +132,7 @@ Instructions:
 
 export default async function permissionExtension(pi: ExtensionAPI) {
   pi.registerFlag("permission-mode", {
-    description: "Permission mode (plan, acceptEdits, bypassPermissions)",
+    description: "Permission mode (default, plan, acceptEdits, bypassPermissions)",
     type: "string",
     default: "",
   });
@@ -146,8 +151,10 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     path.startsWith("~/") ? resolve(home, path.slice(2)) : resolve(path),
   );
   const allowCatastrophic = config.allowCatastrophic === true;
+  const shiftTabModes = normalizeShiftTabOptions(config.shiftTabOptions);
+  const defaultMode = normalizeMode(config.defaultMode);
 
-  let mode = normalizeMode(config.mode);
+  let mode = normalizeMode(config.mode, defaultMode);
   let previousActiveTools: string[] | null = null;
   let planContextPending = mode === "plan";
 
@@ -208,7 +215,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
       mode = "bypassPermissions";
     } else {
       const flagMode = pi.getFlag("permission-mode");
-      if (typeof flagMode === "string" && flagMode) mode = normalizeMode(flagMode);
+      if (typeof flagMode === "string" && flagMode) mode = normalizeMode(flagMode, defaultMode);
     }
 
     if (mode === "plan") {
@@ -223,10 +230,25 @@ export default async function permissionExtension(pi: ExtensionAPI) {
   });
 
   pi.registerShortcut("shift+tab", {
-    description: "Cycle permission mode (plan → accept edits → bypass permissions)",
+    description: `Cycle permission mode (${shiftTabModes.map((m) => getModeMeta(m).label).join(" → ")})`,
     handler: async (ctx) => {
-      const idx = MODES.findIndex((m) => m.id === mode);
-      applyMode(MODES[(idx + 1) % MODES.length]!.id, ctx);
+      const idx = shiftTabModes.findIndex((m) => m === mode);
+      applyMode(shiftTabModes[(idx + 1) % shiftTabModes.length]!, ctx);
+    },
+  });
+
+  pi.registerCommand("permissions", {
+    description: "Select permission mode",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) {
+        ctx.ui.notify("/permissions requires interactive UI", "warning");
+        return;
+      }
+
+      const options = MODES.map((m) => `${m.label} — ${m.description}`);
+      const selected = await ctx.ui.select("Select permission mode", options);
+      const idx = selected ? options.indexOf(selected) : -1;
+      if (idx >= 0) applyMode(MODES[idx]!.id, ctx);
     },
   });
 
@@ -246,7 +268,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     const toolName = event.toolName;
 
     if (mode === "plan") return enforcePlanMode(toolName, event.input);
-    if (!GATED_TOOLS.has(toolName)) return;
+    if (mode !== "default" && !GATED_TOOLS.has(toolName)) return;
 
     const safetyBlock = await enforceAlwaysOnSafety({
       toolName,
@@ -293,6 +315,14 @@ async function loadConfig(): Promise<PermissionsConfig> {
     allowCatastrophic: localSettings.piClaudePermissions?.allowCatastrophic
       ?? globalSettings.piClaudePermissions?.allowCatastrophic
       ?? false,
+    shiftTabOptions: localSettings.piClaudePermissions?.shiftTabOptions
+      ?? globalSettings.piClaudePermissions?.shiftTabOptions
+      ?? local.shiftTabOptions
+      ?? global.shiftTabOptions,
+    defaultMode: localSettings.piClaudePermissions?.defaultMode
+      ?? globalSettings.piClaudePermissions?.defaultMode
+      ?? local.defaultMode
+      ?? global.defaultMode,
   };
 }
 
@@ -304,8 +334,23 @@ async function readJson<T>(path: string): Promise<T | Record<string, never>> {
   }
 }
 
-function normalizeMode(mode: unknown): PermissionMode {
-  return mode === "plan" || mode === "acceptEdits" || mode === "bypassPermissions" ? mode : DEFAULT_MODE;
+function normalizeMode(mode: unknown, fallback: PermissionMode = DEFAULT_MODE): PermissionMode {
+  return parseMode(mode) ?? fallback;
+}
+
+function parseMode(mode: unknown): PermissionMode | undefined {
+  if (mode === "default" || mode === "plan" || mode === "acceptEdits" || mode === "bypassPermissions") return mode;
+  if (mode === "bypass") return "bypassPermissions";
+}
+
+function normalizeShiftTabOptions(options: unknown): PermissionMode[] {
+  if (!Array.isArray(options)) return MODES.map((mode) => mode.id);
+
+  const modes = options
+    .map((option) => parseMode(option))
+    .filter((mode): mode is PermissionMode => mode !== undefined)
+    .filter((mode, index, all) => all.indexOf(mode) === index);
+  return modes.length > 0 ? modes : MODES.map((mode) => mode.id);
 }
 
 function getModeMeta(mode: PermissionMode) {
