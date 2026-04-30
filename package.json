@@ -1,0 +1,24 @@
+{
+  "name": "pi-permissions",
+  "version": "0.1.0",
+  "description": "Opinionated permissions and plan mode extension for pi.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "permissions",
+    "plan-mode"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/zackify/pi-permissions.git"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
