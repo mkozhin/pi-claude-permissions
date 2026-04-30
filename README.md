@@ -17,6 +17,20 @@ This is heavily based on and inspired by [`rHedBull/pi-permissions`](https://git
 - **No `/permissions` commands**.
 - Includes a custom **plan mode**.
 
+## Installation
+
+From npm:
+
+```bash
+pi install npm:@zackify/pi-claude-permissions
+```
+
+Or from GitHub:
+
+```bash
+pi install git:github.com/zackify/pi-claude-permissions
+```
+
 ## Modes
 
 ### `plan`
