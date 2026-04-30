@@ -12,7 +12,8 @@
   "files": [
     "extensions",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "gallery.png"
   ],
   "repository": {
     "type": "git",
@@ -24,6 +25,7 @@
   "pi": {
     "extensions": [
       "./extensions"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/zackify/pi-claude-permissions/master/gallery.png"
   }
 }
