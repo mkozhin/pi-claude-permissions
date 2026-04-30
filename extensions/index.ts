@@ -33,6 +33,13 @@ interface PermissionsConfig {
   dangerousPatterns?: Pattern[];
   catastrophicPatterns?: Pattern[];
   protectedPaths?: string[];
+  allowCatastrophic?: boolean;
+}
+
+interface PiSettingsConfig {
+  piClaudePermissions?: {
+    allowCatastrophic?: boolean;
+  };
 }
 
 const DEFAULT_MODE: PermissionMode = "bypassPermissions";
@@ -138,6 +145,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
   const protectedPaths = (config.protectedPaths ?? DEFAULT_PROTECTED_PATHS).map((path) =>
     path.startsWith("~/") ? resolve(home, path.slice(2)) : resolve(path),
   );
+  const allowCatastrophic = config.allowCatastrophic === true;
 
   let mode = normalizeMode(config.mode);
   let previousActiveTools: string[] | null = null;
@@ -247,6 +255,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
       home,
       protectedPaths,
       catastrophicPatterns,
+      allowCatastrophic,
     });
     if (safetyBlock) return safetyBlock;
 
@@ -262,21 +271,28 @@ export default async function permissionExtension(pi: ExtensionAPI) {
       return { block: true as const, reason: `Blocked ${toolName} (no UI for confirmation, mode: ${mode})` };
     }
 
-    return promptApproval(toolName, event.input, ctx, dangerousPatterns, catastrophicPatterns, sessionAllow);
+    return promptApproval(toolName, event.input, ctx, dangerousPatterns, catastrophicPatterns, sessionAllow, allowCatastrophic);
   });
 }
 
 async function loadConfig(): Promise<PermissionsConfig> {
   const globalPath = resolve(homedir(), ".pi/agent/extensions/permissions.json");
   const localPath = resolve(process.cwd(), ".pi/extensions/permissions.json");
+  const globalSettingsPath = resolve(homedir(), ".pi/agent/settings.json");
+  const localSettingsPath = resolve(process.cwd(), ".pi/settings.json");
   const global = await readJson<PermissionsConfig>(globalPath);
   const local = await readJson<PermissionsConfig>(localPath);
+  const globalSettings = await readJson<PiSettingsConfig>(globalSettingsPath);
+  const localSettings = await readJson<PiSettingsConfig>(localSettingsPath);
 
   return {
     mode: normalizeMode(local.mode ?? global.mode),
     dangerousPatterns: local.dangerousPatterns ?? global.dangerousPatterns ?? DEFAULT_DANGEROUS,
     catastrophicPatterns: local.catastrophicPatterns ?? global.catastrophicPatterns ?? DEFAULT_CATASTROPHIC,
     protectedPaths: local.protectedPaths ?? global.protectedPaths ?? DEFAULT_PROTECTED_PATHS,
+    allowCatastrophic: localSettings.piClaudePermissions?.allowCatastrophic
+      ?? globalSettings.piClaudePermissions?.allowCatastrophic
+      ?? false,
   };
 }
 
@@ -310,21 +326,25 @@ async function enforceAlwaysOnSafety(args: {
   home: string;
   protectedPaths: string[];
   catastrophicPatterns: Pattern[];
+  allowCatastrophic: boolean;
 }) {
-  const { toolName, input, ctx, home, protectedPaths, catastrophicPatterns } = args;
+  const { toolName, input, ctx, home, protectedPaths, catastrophicPatterns, allowCatastrophic } = args;
 
   if (toolName === "bash") {
     const command = String(input.command ?? "");
-    const criticalRm = checkCriticalRmRf(command);
-    if (criticalRm) {
-      ctx.ui.notify(`🚫 Blocked catastrophic command: ${criticalRm}`, "error");
-      return { block: true as const, reason: `Catastrophic command blocked: ${criticalRm}. This cannot be overridden.` };
-    }
 
-    const catastrophe = findMatch(command, catastrophicPatterns);
-    if (catastrophe) {
-      ctx.ui.notify(`🚫 Blocked catastrophic command: ${catastrophe.description}`, "error");
-      return { block: true as const, reason: `Catastrophic command blocked: ${catastrophe.description}. This cannot be overridden.` };
+    if (!allowCatastrophic) {
+      const criticalRm = checkCriticalRmRf(command);
+      if (criticalRm) {
+        ctx.ui.notify(`🚫 Blocked catastrophic command: ${criticalRm}`, "error");
+        return { block: true as const, reason: `Catastrophic command blocked: ${criticalRm}. This cannot be overridden.` };
+      }
+
+      const catastrophe = findMatch(command, catastrophicPatterns);
+      if (catastrophe) {
+        ctx.ui.notify(`🚫 Blocked catastrophic command: ${catastrophe.description}`, "error");
+        return { block: true as const, reason: `Catastrophic command blocked: ${catastrophe.description}. This cannot be overridden.` };
+      }
     }
 
     const protectedPath = protectedPaths.find((path) => command.includes(path) || command.includes(path.replace(home, "~")));
@@ -470,8 +490,9 @@ async function promptApproval(
   dangerousPatterns: Pattern[],
   catastrophicPatterns: Pattern[],
   sessionAllow: SessionAllow,
+  allowCatastrophic: boolean,
 ): Promise<{ block: true; reason: string } | undefined> {
-  const { icon, description } = describeApprovalRequest(toolName, input, dangerousPatterns, catastrophicPatterns);
+  const { icon, description } = describeApprovalRequest(toolName, input, dangerousPatterns, catastrophicPatterns, allowCatastrophic);
   const options = [
     "Allow once",
     toolName === "bash" ? "Allow this command for session" : `Allow all ${toolName} for session`,
@@ -495,6 +516,7 @@ function describeApprovalRequest(
   input: Record<string, unknown>,
   dangerousPatterns: Pattern[],
   catastrophicPatterns: Pattern[],
+  allowCatastrophic: boolean,
 ): { icon: string; description: string } {
   if (toolName === "write") return { icon: "🔒", description: `write: ${input.path}` };
   if (toolName === "edit") return { icon: "🔒", description: `edit: ${input.path}` };
@@ -502,7 +524,7 @@ function describeApprovalRequest(
 
   const command = String(input.command ?? "");
   const displayCmd = command.length > 200 ? command.slice(0, 200) + "…" : command;
-  const catastrophe = findMatch(command, catastrophicPatterns);
+  const catastrophe = allowCatastrophic ? undefined : findMatch(command, catastrophicPatterns);
   const danger = findMatch(command, dangerousPatterns);
   const rmDanger = checkDangerousRmRf(command, process.cwd());
 

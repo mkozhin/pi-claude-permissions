@@ -9,6 +9,11 @@
     "plan-mode"
   ],
   "license": "MIT",
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
   "repository": {
     "type": "git",
     "url": "git+ssh://git@github.com/zackify/pi-claude-permissions.git"

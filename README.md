@@ -98,12 +98,26 @@ Plan mode ended. Execute the plan.
 plan → acceptEdits → bypassPermissions → plan
 ```
 
+## Configuration
+
+Set this in `~/.pi/agent/settings.json` or project-local `.pi/settings.json`:
+
+```json
+{
+  "piClaudePermissions": {
+    "allowCatastrophic": false
+  }
+}
+```
+
+`allowCatastrophic` defaults to `false`. When set to `true`, catastrophic command blocking and critical `rm -rf` detection are allowed. Protected path checks still run.
+
 ## Safety checks kept from the inspiration plugin
 
 This keeps the useful always-on protections from `rHedBull/pi-permissions`:
 
-- catastrophic command blocking
-- critical `rm -rf` detection
+- catastrophic command blocking (unless `piClaudePermissions.allowCatastrophic` is `true`)
+- critical `rm -rf` detection (unless `piClaudePermissions.allowCatastrophic` is `true`)
 - protected path checks
 - shell trick confirmation outside bypass mode
 - session-level approvals for prompted operations
