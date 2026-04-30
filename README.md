@@ -1,10 +1,8 @@
-# pi-permissions
+# pi-claude-permissions
 
-An opinionated local permissions extension for [pi](https://pi.dev).
+Claude-style permissions for [pi](https://pi.dev), with an opinionated small set of modes and built-in plan mode.
 
-This was inspired by [`rHedBull/pi-permissions`](https://github.com/rHedBull/pi-permissions). Big shoutout to rHedBull for the original Claude Code-style permission workflow and the safety checks this builds on.
-
-This version is intentionally more personal and streamlined for my workflow.
+This is heavily based on and inspired by [`rHedBull/pi-permissions`](https://github.com/rHedBull/pi-permissions). Big shoutout to rHedBull for the original Claude Code-style permission workflow and safety checks. This version stays close to the Claude-style permission experience, but is more opinionated: it only exposes the modes below, defaults to bypass, uses `Shift+Tab`, and adds plan mode.
 
 ## What is different?
 
@@ -105,13 +103,13 @@ The active local pi extension lives at:
 This repository copy lives at:
 
 ```text
-~/pi-permissions/extensions/index.ts
+~/pi-claude-permissions/extensions/index.ts
 ```
 
 After editing this copy, sync it back to pi with:
 
 ```bash
-cp ~/pi-permissions/extensions/index.ts ~/.pi/agent/extensions/permission-plan-mode.ts
+cp ~/pi-claude-permissions/extensions/index.ts ~/.pi/agent/extensions/permission-plan-mode.ts
 ```
 
 Then reload pi with `/reload` or restart pi.

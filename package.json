@@ -1,7 +1,7 @@
 {
-  "name": "pi-permissions",
+  "name": "pi-claude-permissions",
   "version": "0.1.0",
-  "description": "Opinionated permissions and plan mode extension for pi.",
+  "description": "Claude-style permissions for pi with an opinionated small mode set and built-in plan mode.",
   "keywords": [
     "pi-package",
     "pi",
@@ -11,7 +11,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/zackify/pi-permissions.git"
+    "url": "git+ssh://git@github.com/zackify/pi-claude-permissions.git"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*"
