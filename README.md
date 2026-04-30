@@ -1,5 +1,7 @@
 # pi-claude-permissions
 
+![pi-claude-permissions gallery preview](./gallery.png)
+
 Claude-style permissions for [pi](https://pi.dev), with an opinionated small set of modes and built-in plan mode.
 
 This is my personal favorite permission cycling setup: I find default/confirm-everything mode pointless, but I sometimes want to watch bash commands. Most of the time I run in `bypassPermissions`, or start work in `plan` mode and then let the agent execute once the plan looks good.
