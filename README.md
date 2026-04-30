@@ -117,18 +117,18 @@ Set this in `~/.pi/agent/settings.json` or project-local `.pi/settings.json`:
 ```json
 {
   "piClaudePermissions": {
-    "defaultMode": "bypass",
+    "defaultMode": "bypassPermissions",
     "allowCatastrophic": false,
-    "shiftTabOptions": ["default", "plan", "acceptEdits", "bypass"]
+    "shiftTabOptions": ["default", "plan", "acceptEdits", "bypassPermissions"]
   }
 }
 ```
 
-`defaultMode` controls the startup mode and defaults to `bypassPermissions`. Valid values are `default`, `plan`, `acceptEdits`, `bypassPermissions`, and the short alias `bypass`.
+`defaultMode` controls the startup mode and defaults to `bypassPermissions`. Valid values are `default`, `plan`, `acceptEdits`, and `bypassPermissions`.
 
 `allowCatastrophic` defaults to `false`. When set to `true`, catastrophic command blocking and critical `rm -rf` detection are allowed. Protected path checks still run.
 
-`shiftTabOptions` defaults to all modes. Valid values are `default`, `plan`, `acceptEdits`, `bypassPermissions`, and the short alias `bypass`. This only changes the `Shift+Tab` cycle; `/permissions` still lists every mode.
+`shiftTabOptions` defaults to all modes. Valid values are `default`, `plan`, `acceptEdits`, and `bypassPermissions`. This only changes the `Shift+Tab` cycle; `/permissions` still lists every mode.
 
 ## Safety checks kept from the inspiration plugin
 

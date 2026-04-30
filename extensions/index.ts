@@ -340,7 +340,6 @@ function normalizeMode(mode: unknown, fallback: PermissionMode = DEFAULT_MODE): 
 
 function parseMode(mode: unknown): PermissionMode | undefined {
   if (mode === "default" || mode === "plan" || mode === "acceptEdits" || mode === "bypassPermissions") return mode;
-  if (mode === "bypass") return "bypassPermissions";
 }
 
 function normalizeShiftTabOptions(options: unknown): PermissionMode[] {
