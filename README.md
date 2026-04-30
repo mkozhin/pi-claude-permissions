@@ -2,6 +2,8 @@
 
 Claude-style permissions for [pi](https://pi.dev), with an opinionated small set of modes and built-in plan mode.
 
+This is my personal favorite permission cycling setup: I find default/confirm-everything mode pointless, but I sometimes want to watch bash commands. Most of the time I run in `bypassPermissions`, or start work in `plan` mode and then let the agent execute once the plan looks good.
+
 This is heavily based on and inspired by [`rHedBull/pi-permissions`](https://github.com/rHedBull/pi-permissions). Big shoutout to rHedBull for the original Claude Code-style permission workflow and safety checks. This version stays close to the Claude-style permission experience, but is more opinionated: it only exposes the modes below, defaults to bypass, uses `Shift+Tab`, and adds plan mode.
 
 ## What is different?
