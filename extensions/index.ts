@@ -102,19 +102,6 @@ const DEFAULT_PROTECTED_PATHS = [
   "~/.netrc", "~/.npmrc", "~/.docker/config.json", "~/.kube/config", "~/.pi/agent/auth.json",
 ];
 
-const SHELL_TRICK_PATTERNS = [
-  { pattern: /\$\(/, description: "command substitution $(…)" },
-  { pattern: /`[^`]+`/, description: "backtick command substitution" },
-  { pattern: /\beval\b/, description: "eval execution" },
-  { pattern: /\bbash\s+-c\b/, description: "bash -c execution" },
-  { pattern: /\bsh\s+-c\b/, description: "sh -c execution" },
-  { pattern: /\|\s*(ba)?sh\b/, description: "pipe to shell" },
-  { pattern: /\bexec\b/, description: "exec execution" },
-  { pattern: /\bsource\b/, description: "source execution" },
-  { pattern: />\(/, description: "process substitution >(…)" },
-  { pattern: /<\(/, description: "process substitution <(…)" },
-];
-
 const PLAN_MODE_MESSAGE = `[PLAN MODE ACTIVE]
 You are in plan mode — a read-only exploration mode for safe code analysis.
 
@@ -284,9 +271,6 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     if (mode === "bypassPermissions") return;
     if (mode === "acceptEdits" && (toolName === "write" || toolName === "edit")) return;
 
-    const shellTrickBlock = await maybeConfirmShellTrick(toolName, event.input, ctx);
-    if (shellTrickBlock) return shellTrickBlock;
-
     if (isSessionAllowed(toolName, event.input, sessionAllow)) return;
 
     if (!ctx.hasUI) {
@@ -407,20 +391,6 @@ async function enforceAlwaysOnSafety(args: {
       return { block: true as const, reason: `Protected path blocked: ${targetPath}. This cannot be overridden.` };
     }
   }
-}
-
-async function maybeConfirmShellTrick(toolName: string, input: Record<string, unknown>, ctx: UiContext) {
-  if (toolName !== "bash") return;
-
-  const command = String(input.command ?? "");
-  const trick = SHELL_TRICK_PATTERNS.find((pattern) => pattern.pattern.test(command));
-  if (!trick) return;
-
-  if (!ctx.hasUI) return { block: true as const, reason: `Blocked shell trick: ${trick.description} (no UI for confirmation)` };
-
-  const displayCmd = command.length > 200 ? command.slice(0, 200) + "…" : command;
-  const choice = await ctx.ui.select(`⚠️ bash: ${displayCmd}\n   ⚠️  SHELL TRICK: ${trick.description}`, ["Allow once", "Deny"]);
-  if (choice !== "Allow once") return { block: true as const, reason: `User denied shell trick: ${trick.description}` };
 }
 
 function isSessionAllowed(toolName: string, input: Record<string, unknown>, sessionAllow: SessionAllow): boolean {
@@ -567,13 +537,12 @@ function describeApprovalRequest(
   if (toolName !== "bash") return { icon: "🔒", description: toolName };
 
   const command = String(input.command ?? "");
-  const displayCmd = command.length > 200 ? command.slice(0, 200) + "…" : command;
   const catastrophe = allowCatastrophic ? undefined : findMatch(command, catastrophicPatterns);
   const danger = findMatch(command, dangerousPatterns);
   const rmDanger = checkDangerousRmRf(command, process.cwd());
 
-  if (catastrophe) return { icon: "🚫", description: `bash: ${displayCmd}\n   🚫 CATASTROPHIC: ${catastrophe.description}` };
-  if (danger) return { icon: "⚠️", description: `bash: ${displayCmd}\n   ⚠️  DANGEROUS: ${danger.description}` };
-  if (rmDanger) return { icon: "⚠️", description: `bash: ${displayCmd}\n   ⚠️  DANGEROUS: ${rmDanger.description}` };
-  return { icon: "🔒", description: `bash: ${displayCmd}` };
+  if (catastrophe) return { icon: "🚫", description: `bash: ${command}\n   🚫 CATASTROPHIC: ${catastrophe.description}` };
+  if (danger) return { icon: "⚠️", description: `bash: ${command}\n   ⚠️  DANGEROUS: ${danger.description}` };
+  if (rmDanger) return { icon: "⚠️", description: `bash: ${command}\n   ⚠️  DANGEROUS: ${rmDanger.description}` };
+  return { icon: "🔒", description: `bash: ${command}` };
 }

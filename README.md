@@ -137,7 +137,6 @@ This keeps the useful always-on protections from `rHedBull/pi-permissions`:
 - catastrophic command blocking (unless `piClaudePermissions.allowCatastrophic` is `true`)
 - critical `rm -rf` detection (unless `piClaudePermissions.allowCatastrophic` is `true`)
 - protected path checks
-- shell trick confirmation outside bypass mode
 - session-level approvals for prompted operations
 
 ## Files
