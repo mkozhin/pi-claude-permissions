@@ -1,6 +1,6 @@
 {
   "name": "@zackify/pi-claude-permissions",
-  "version": "0.2.0",
+  "version": "1.0.6",
   "description": "Claude-style permissions for pi with an opinionated small mode set and built-in plan mode.",
   "keywords": [
     "pi-package",
