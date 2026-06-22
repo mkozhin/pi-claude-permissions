@@ -1,12 +1,13 @@
 {
-  "name": "@zackify/pi-claude-permissions",
-  "version": "1.0.6",
-  "description": "Claude-style permissions for pi with an opinionated small mode set and built-in plan mode.",
+  "name": "@mkozhin/pi-claude-permissions",
+  "version": "0.1.0",
+  "description": "Personal fork of Claude-style permissions for pi with mode cycling and plan mode.",
   "keywords": [
     "pi-package",
     "pi",
     "permissions",
-    "plan-mode"
+    "plan-mode",
+    "claude-permissions"
   ],
   "license": "MIT",
   "files": [
@@ -15,17 +16,30 @@
     "LICENSE",
     "gallery.png"
   ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "pack:dry": "npm pack --dry-run"
+  },
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/zackify/pi-claude-permissions.git"
+    "url": "git+ssh://git@github.com/mkozhin/pi-claude-permissions.git"
   },
+  "bugs": {
+    "url": "https://github.com/mkozhin/pi-claude-permissions/issues"
+  },
+  "homepage": "https://github.com/mkozhin/pi-claude-permissions#readme",
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.79.9",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
   },
   "pi": {
     "extensions": [
       "./extensions"
     ],
-    "image": "https://raw.githubusercontent.com/zackify/pi-claude-permissions/master/gallery.png"
+    "image": "https://raw.githubusercontent.com/mkozhin/pi-claude-permissions/main/gallery.png"
   }
 }

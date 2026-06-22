@@ -1,7 +1,8 @@
 /**
- * Opinionated Permissions + Plan Mode for pi
+ * Personal fork: Opinionated Permissions + Plan Mode for pi
  *
- * Inspired by rHedBull/pi-permissions, trimmed down for this workflow:
+ * Based on zackify/pi-claude-permissions and inspired by rHedBull/pi-permissions,
+ * trimmed down for this workflow:
  * - Shift+Tab cycles configurable modes.
  * - Default startup mode is bypassPermissions.
  * - Plan mode is read-only and injects planning instructions.

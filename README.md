@@ -1,39 +1,19 @@
-# pi-claude-permissions
+# pi-claude-permissions (personal fork)
 
 ![pi-claude-permissions gallery preview](./gallery.png)
 
-Claude-style permissions for [pi](https://pi.dev), with configurable mode cycling and built-in plan mode.
+Personal fork of [`@zackify/pi-claude-permissions`](https://github.com/zackify/pi-claude-permissions): Claude-style permissions for [pi](https://pi.dev), with configurable mode cycling and built-in plan mode.
 
-This is my personal favorite permission cycling setup. Most of the time I run in `bypassPermissions`, or start work in `plan` mode and then let the agent execute once the plan looks good. If you prefer confirmation for everything, `default` mode is available too.
+Upstream is preserved as the `upstream` git remote so we can pull fixes later, while this repo evolves under `@mkozhin/pi-claude-permissions`.
 
-This is heavily based on and inspired by [`rHedBull/pi-permissions`](https://github.com/rHedBull/pi-permissions). Big shoutout to rHedBull for the original Claude Code-style permission workflow and safety checks. This version stays close to the Claude-style permission experience, defaults to bypass, uses `Shift+Tab`, supports `/permissions`, and adds plan mode.
+## What this extension does
 
-## What is different?
-
-- **Four modes**:
-  - `default`
-  - `plan`
-  - `acceptEdits`
-  - `bypassPermissions`
-- **No `fullAuto` mode**.
-- **`bypassPermissions` is the startup default**.
-- **Configurable `Shift+Tab` cycle**.
-- **`/permissions` always shows all modes** for manual selection.
-- Includes a custom **plan mode**.
-
-## Installation
-
-From npm:
-
-```bash
-pi install npm:@zackify/pi-claude-permissions
-```
-
-Or from GitHub:
-
-```bash
-pi install git:github.com/zackify/pi-claude-permissions
-```
+- Adds permission modes inspired by Claude Code.
+- Shows current mode in the pi footer/status line.
+- Lets `Shift+Tab` cycle modes.
+- Adds `/permissions` for manual mode selection.
+- Adds read-only `plan` mode that injects planning instructions.
+- Keeps always-on safety checks for catastrophic commands and protected paths.
 
 ## Modes
 
@@ -60,6 +40,7 @@ Allowed tools:
 - `fd`
 - `bat`
 - `eza`
+- selected `mcp` servers if configured
 
 Blocked in plan mode:
 
@@ -76,18 +57,6 @@ In plan mode, only read files/search tools are allowed.
 
 It also injects visible planning instructions into the next agent turn so the model knows to inspect only and produce a detailed plan.
 
-When leaving plan mode, the extension notifies:
-
-```text
-Plan mode ended
-```
-
-If you leave plan mode while the agent is idle and there is already at least one assistant response in the session, it sends this user message automatically:
-
-```text
-Plan mode ended. Execute the plan.
-```
-
 ### `acceptEdits`
 
 - Allows `write` and `edit` automatically.
@@ -100,15 +69,29 @@ Plan mode ended. Execute the plan.
 - Still blocks catastrophic commands and protected paths.
 - This is the default mode.
 
-## Shortcut and command
+## Installation for local development
 
-By default, `Shift+Tab` cycles all modes:
+From this checkout:
 
-```text
-default → plan → acceptEdits → bypassPermissions → default
+```bash
+pi install ./
 ```
 
-Use `/permissions` to manually select any mode at any time. If you rarely use one of the modes, set `piClaudePermissions.shiftTabOptions` to keep your `Shift+Tab` cycle faster; `/permissions` will still show all modes.
+Then restart pi or run `/reload` inside pi.
+
+For one-off testing without adding it to settings:
+
+```bash
+pi -e ./
+```
+
+If/when this fork is published or pushed to GitHub, it can also be installed as a normal pi package:
+
+```bash
+pi install git:github.com/mkozhin/pi-claude-permissions
+# or, if published to npm:
+pi install npm:@mkozhin/pi-claude-permissions
+```
 
 ## Configuration
 
@@ -119,44 +102,45 @@ Set this in `~/.pi/agent/settings.json` or project-local `.pi/settings.json`:
   "piClaudePermissions": {
     "defaultMode": "bypassPermissions",
     "allowCatastrophic": false,
-    "shiftTabOptions": ["default", "plan", "acceptEdits", "bypassPermissions"]
+    "shiftTabOptions": ["default", "plan", "acceptEdits", "bypassPermissions"],
+    "hideDefaultMode": false,
+    "planModeAllowedMcpServers": []
   }
 }
 ```
 
-`defaultMode` controls the startup mode and defaults to `bypassPermissions`. Valid values are `default`, `plan`, `acceptEdits`, and `bypassPermissions`.
+`defaultMode` controls the startup mode. Valid built-in values are `default`, `plan`, `acceptEdits`, and `bypassPermissions`.
 
 `allowCatastrophic` defaults to `false`. When set to `true`, catastrophic command blocking and critical `rm -rf` detection are allowed. Protected path checks still run.
 
-`shiftTabOptions` defaults to all modes. Valid values are `default`, `plan`, `acceptEdits`, and `bypassPermissions`. This only changes the `Shift+Tab` cycle; `/permissions` still lists every mode.
+`shiftTabOptions` controls only the `Shift+Tab` cycle. `/permissions` still lists every mode.
 
-## Safety checks kept from the inspiration plugin
+`hideDefaultMode` hides the footer/status indicator when the active mode equals the configured default.
 
-This keeps the useful always-on protections from `rHedBull/pi-permissions`:
+`planModeAllowedMcpServers` allows specific MCP servers during plan mode.
 
-- catastrophic command blocking (unless `piClaudePermissions.allowCatastrophic` is `true`)
-- critical `rm -rf` detection (unless `piClaudePermissions.allowCatastrophic` is `true`)
-- protected path checks
-- session-level approvals for prompted operations
+The extension also supports `customModes` for project-specific policies. We can shape this further as our needs become clear.
 
-## Files
-
-The active local pi extension lives at:
-
-```text
-~/.pi/agent/extensions/permission-plan-mode.ts
-```
-
-This repository copy lives at:
-
-```text
-~/pi-claude-permissions/extensions/index.ts
-```
-
-After editing this copy, sync it back to pi with:
+## Development
 
 ```bash
-cp ~/pi-claude-permissions/extensions/index.ts ~/.pi/agent/extensions/permission-plan-mode.ts
+npm install
+npm run typecheck
+npm run pack:dry
 ```
 
-Then reload pi with `/reload` or restart pi.
+Useful local loop:
+
+1. Edit `extensions/index.ts`.
+2. Run `npm run typecheck`.
+3. Run `/reload` in pi if installed via `pi install ./`, or restart the `pi -e ./` test session.
+
+## Fork notes
+
+- Upstream: [`zackify/pi-claude-permissions`](https://github.com/zackify/pi-claude-permissions)
+- Inspired by: [`rHedBull/pi-permissions`](https://github.com/rHedBull/pi-permissions)
+- Package key remains `piClaudePermissions` for compatibility with upstream config.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
