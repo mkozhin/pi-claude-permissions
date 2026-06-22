@@ -41,7 +41,7 @@ No new source files or tests are required for this narrow behavior change.
 - Consumes: existing `DEFAULT_MODE: PermissionMode`, `normalizeMode(config.defaultMode, DEFAULT_MODE, modes)`, existing CLI flag handling in `session_start`.
 - Produces: package-level default startup mode of `default`; README instructions that document the new default and preserve explicit opt-in to `bypassPermissions`.
 
-- [ ] **Step 1: Inspect the current default mode constant and README references**
+- [x] **Step 1: Inspect the current default mode constant and README references**
 
 Run:
 
@@ -51,7 +51,7 @@ grep -n "DEFAULT_MODE\|Default startup mode\|This is the default mode\|defaultMo
 
 Expected: output includes `const DEFAULT_MODE: PermissionMode = "bypassPermissions";`, a header comment saying bypass is the default startup mode, README text saying `bypassPermissions` is the default mode, and a config example with `"defaultMode": "bypassPermissions"`.
 
-- [ ] **Step 2: Update `extensions/index.ts` default metadata**
+- [x] **Step 2: Update `extensions/index.ts` default metadata**
 
 Edit `extensions/index.ts` so the file header no longer says bypass is the startup default. Replace this comment bullet:
 
@@ -79,7 +79,7 @@ const DEFAULT_MODE: PermissionMode = "default";
 
 Do not change `loadConfig()`, `normalizeMode()`, `session_start`, `enforceAlwaysOnSafety()`, or any mode enforcement branch.
 
-- [ ] **Step 3: Update README mode descriptions**
+- [x] **Step 3: Update README mode descriptions**
 
 Edit `README.md` so `default` is documented as the startup default. In the `### default` section, keep the existing bullets and add this bullet after “Confirmation mode.” or after the existing bullet list:
 
@@ -95,7 +95,7 @@ In the `### bypassPermissions` section, remove this bullet:
 
 Keep the existing explanation that `bypassPermissions` allows normal operations without confirmation and still blocks catastrophic/protected operations.
 
-- [ ] **Step 4: Update README configuration example**
+- [x] **Step 4: Update README configuration example**
 
 In `README.md`, change the sample configuration from:
 
@@ -131,7 +131,7 @@ Then replace the explanatory sentence for `defaultMode` with:
 `defaultMode` controls the startup mode and defaults to `default` in this fork. Valid built-in values are `default`, `plan`, `acceptEdits`, and `bypassPermissions`. Set it explicitly if you want a different startup mode.
 ```
 
-- [ ] **Step 5: Verify the intended code diff is narrow**
+- [x] **Step 5: Verify the intended code diff is narrow**
 
 Run:
 
@@ -141,7 +141,7 @@ git diff -- extensions/index.ts README.md
 
 Expected: `extensions/index.ts` diff changes only the header comment bullet and `DEFAULT_MODE`; `README.md` diff changes only default-mode documentation/config text. No mode enforcement branches change.
 
-- [ ] **Step 6: Run typecheck**
+- [x] **Step 6: Run typecheck**
 
 Run:
 
@@ -158,7 +158,7 @@ Expected output includes:
 
 Expected exit code: `0`.
 
-- [ ] **Step 7: Run package dry-run**
+- [x] **Step 7: Run package dry-run**
 
 Run:
 
@@ -174,7 +174,7 @@ npm notice 📦  @mkozhin/pi-claude-permissions@0.1.0
 
 Expected exit code: `0`.
 
-- [ ] **Step 8: Smoke-test extension loading**
+- [x] **Step 8: Smoke-test extension loading**
 
 Run:
 
@@ -190,7 +190,7 @@ No models matching "__no_such_model__"
 
 Expected exit code: `0`.
 
-- [ ] **Step 9: Commit the default startup mode change**
+- [x] **Step 9: Commit the default startup mode change**
 
 Run:
 
@@ -200,6 +200,17 @@ git commit -m "feat: default to confirmation mode"
 ```
 
 Expected: commit succeeds and includes only the source/doc changes for this task. If unrelated pre-existing changes are present in the working tree, do not stage them.
+
+## Execution Results
+
+Completed on 2026-06-22.
+
+- Pre-existing fork setup changes were committed separately as `e8b7b20 chore: initialize personal fork` so this implementation stayed narrow.
+- Implementation committed as `68e55d0 feat: default to confirmation mode`.
+- `npm run typecheck` passed with exit code 0.
+- `npm run pack:dry` passed with exit code 0.
+- `PI_OFFLINE=1 pi -e ./ --no-context-files --no-session --list-models '__no_such_model__'` passed with output `No models matching "__no_such_model__"`.
+- Working tree was clean after the implementation commit.
 
 ---
 
