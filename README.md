@@ -9,7 +9,7 @@ Upstream is preserved as the `upstream` git remote so we can pull fixes later, w
 ## What this extension does
 
 - Adds permission modes inspired by Claude Code.
-- Shows current mode in the pi footer/status line.
+- Shows current mode in the Pi status line and can publish a `pi-powerbar` segment.
 - Lets `Shift+Tab` cycle modes.
 - Adds `/permissions` for manual mode selection.
 - Adds read-only `plan` mode that injects planning instructions.
@@ -118,6 +118,25 @@ Set this in `~/.pi/agent/settings.json` or project-local `.pi/settings.json`:
 `hideDefaultMode` hides the footer/status indicator when the active mode equals the configured default.
 
 `planModeAllowedMcpServers` allows specific MCP servers during plan mode.
+
+## Powerbar visibility
+
+If you use [`@juanibiapina/pi-powerbar`](https://github.com/juanibiapina/pi-powerbar), this extension registers a `Permissions` segment with id `permissions` and keeps it updated with the active mode.
+
+The segment is not enabled automatically. To show it, run:
+
+```text
+/extension-settings → powerbar → Left segments / Right segments → Permissions
+```
+
+The segment uses the same short Claude-like labels as the built-in status fallback:
+
+| Mode | Display |
+| --- | --- |
+| `default` | `⏵ Default` |
+| `plan` | `⏸ Plan` |
+| `acceptEdits` | `⏵⏵ Accept Edits` |
+| `bypassPermissions` | `⏵⏵⏵⏵ Bypass` |
 
 The extension also supports `customModes` for project-specific policies. We can shape this further as our needs become clear.
 

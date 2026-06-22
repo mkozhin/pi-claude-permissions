@@ -47,6 +47,13 @@ interface ModeDefinition {
   policy?: CustomModePolicy;
 }
 
+interface ModeDisplay {
+  icon: string;
+  text: string;
+  color: string;
+  statusText: string;
+}
+
 interface PermissionsConfig {
   mode?: string;
   dangerousPatterns?: Pattern[];
@@ -73,6 +80,8 @@ interface PiSettingsConfig {
 
 const DEFAULT_MODE: PermissionMode = "default";
 const PLAN_BLOCK_REASON = "You are in plan mode, you can only read files/search tools until the user exits plan mode.";
+const POWERBAR_SEGMENT_ID = "permissions";
+const POWERBAR_SEGMENT_LABEL = "Permissions";
 
 const BUILT_IN_MODES: ModeDefinition[] = [
   { id: "default", label: "Default", description: "Ask before write/edit/bash operations", status: "⏵" },
@@ -146,6 +155,8 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     default: false,
   });
 
+  registerPowerbarSegment(pi);
+
   const config = await loadConfig();
   const home = homedir();
   const sessionAllow: SessionAllow = { tools: new Set(), commands: new Set() };
@@ -182,14 +193,20 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     pi.setActiveTools(PLAN_MODE_TOOLS);
   };
 
-  const updateStatus = (ctx: UiContext) => {
+  const clearModeDisplay = (ctx: UiContext) => {
+    clearPowerbarSegment(pi);
+    ctx.ui.setStatus("permissions", undefined);
+  };
+
+  const updateModeDisplay = (ctx: UiContext) => {
     if (hideDefaultMode && mode === defaultMode) {
-      ctx.ui.setStatus("permissions", undefined);
+      clearModeDisplay(ctx);
       return;
     }
 
-    const meta = getModeMeta(mode, modes);
-    ctx.ui.setStatus("permissions", `${meta.status} ${meta.label}`);
+    const display = getModeDisplay(getModeMeta(mode, modes));
+    updatePowerbarSegment(pi, display);
+    updatePiStatus(ctx, display);
   };
 
   const applyMode = async (nextMode: PermissionMode, ctx: UiContext) => {
@@ -215,7 +232,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
       ctx.ui.notify(`Permission mode: ${getModeMeta(mode, modes).label}`, "info");
     }
 
-    updateStatus(ctx);
+    updateModeDisplay(ctx);
   };
 
   pi.on("session_start", async (_event, ctx) => {
@@ -237,7 +254,12 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     }
     planEndedContextPending = false;
 
-    updateStatus(ctx);
+    registerPowerbarSegment(pi);
+    updateModeDisplay(ctx);
+  });
+
+  pi.on("session_shutdown", async () => {
+    clearPowerbarSegment(pi);
   });
 
   pi.registerShortcut("shift+tab", {
@@ -462,6 +484,62 @@ function normalizeShiftTabOptions(options: unknown, allModes: ModeDefinition[]):
 
 function getModeMeta(mode: PermissionMode, modes: ModeDefinition[]) {
   return modes.find((m) => m.id === mode) ?? modes.find((m) => m.id === DEFAULT_MODE)!;
+}
+
+function getModeDisplay(mode: ModeDefinition): ModeDisplay {
+  const text = getModeDisplayText(mode);
+  return {
+    icon: mode.status,
+    text,
+    color: getModeDisplayColor(mode.id),
+    statusText: `${mode.status} ${text}`,
+  };
+}
+
+function getModeDisplayText(mode: ModeDefinition): string {
+  if (mode.id === "bypassPermissions") return "Bypass";
+  return mode.label;
+}
+
+function getModeDisplayColor(mode: PermissionMode): string {
+  switch (mode) {
+    case "plan":
+      return "warning";
+    case "acceptEdits":
+      return "accent";
+    case "bypassPermissions":
+      return "warning";
+    case "default":
+    default:
+      return "muted";
+  }
+}
+
+function registerPowerbarSegment(pi: ExtensionAPI): void {
+  pi.events.emit("powerbar:register-segment", {
+    id: POWERBAR_SEGMENT_ID,
+    label: POWERBAR_SEGMENT_LABEL,
+  });
+}
+
+function updatePowerbarSegment(pi: ExtensionAPI, display: ModeDisplay): void {
+  pi.events.emit("powerbar:update", {
+    id: POWERBAR_SEGMENT_ID,
+    text: display.text,
+    icon: display.icon,
+    color: display.color,
+  });
+}
+
+function clearPowerbarSegment(pi: ExtensionAPI): void {
+  pi.events.emit("powerbar:update", {
+    id: POWERBAR_SEGMENT_ID,
+    text: undefined,
+  });
+}
+
+function updatePiStatus(ctx: UiContext, display: ModeDisplay): void {
+  ctx.ui.setStatus("permissions", display.statusText);
 }
 
 function enforcePlanMode(toolName: string, input: Record<string, unknown>, allowedMcpServers: Set<string>) {
