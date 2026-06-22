@@ -4,7 +4,7 @@
  * Based on zackify/pi-claude-permissions and inspired by rHedBull/pi-permissions,
  * trimmed down for this workflow:
  * - Shift+Tab cycles configurable modes.
- * - Default startup mode is bypassPermissions.
+ * - Default startup mode is confirmation mode (`default`) in this fork.
  * - Plan mode is read-only and injects planning instructions.
  */
 
@@ -71,7 +71,7 @@ interface PiSettingsConfig {
   };
 }
 
-const DEFAULT_MODE: PermissionMode = "bypassPermissions";
+const DEFAULT_MODE: PermissionMode = "default";
 const PLAN_BLOCK_REASON = "You are in plan mode, you can only read files/search tools until the user exits plan mode.";
 
 const BUILT_IN_MODES: ModeDefinition[] = [

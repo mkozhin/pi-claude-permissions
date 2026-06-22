@@ -24,6 +24,7 @@ Confirmation mode.
 - Prompts before every tool call.
 - Keeps session-level approvals for prompted operations.
 - Still blocks protected paths and catastrophic commands.
+- This is the startup default for this fork.
 
 ### `plan`
 
@@ -67,7 +68,6 @@ It also injects visible planning instructions into the next agent turn so the mo
 
 - Allows normal operations without confirmation.
 - Still blocks catastrophic commands and protected paths.
-- This is the default mode.
 
 ## Installation for local development
 
@@ -100,7 +100,7 @@ Set this in `~/.pi/agent/settings.json` or project-local `.pi/settings.json`:
 ```json
 {
   "piClaudePermissions": {
-    "defaultMode": "bypassPermissions",
+    "defaultMode": "default",
     "allowCatastrophic": false,
     "shiftTabOptions": ["default", "plan", "acceptEdits", "bypassPermissions"],
     "hideDefaultMode": false,
@@ -109,7 +109,7 @@ Set this in `~/.pi/agent/settings.json` or project-local `.pi/settings.json`:
 }
 ```
 
-`defaultMode` controls the startup mode. Valid built-in values are `default`, `plan`, `acceptEdits`, and `bypassPermissions`.
+`defaultMode` controls the startup mode and defaults to `default` in this fork. Valid built-in values are `default`, `plan`, `acceptEdits`, and `bypassPermissions`. Set it explicitly if you want a different startup mode.
 
 `allowCatastrophic` defaults to `false`. When set to `true`, catastrophic command blocking and critical `rm -rf` detection are allowed. Protected path checks still run.
 
