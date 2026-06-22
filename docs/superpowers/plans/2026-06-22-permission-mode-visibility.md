@@ -40,7 +40,7 @@ No new runtime files are required. No package dependency changes are required.
 - Consumes: existing `ModeDefinition`, `PermissionMode`, `mode`, `defaultMode`, `hideDefaultMode`, `getModeMeta()`, existing `updateStatus(ctx)` call sites.
 - Produces: `ModeDisplay`, `registerPowerbarSegment()`, `updatePowerbarSegment()`, `clearPowerbarSegment()`, and `updateModeDisplay(ctx)` behavior. Later README docs rely on segment id `permissions` and label `Permissions`.
 
-- [ ] **Step 1: Inspect current display update code**
+- [x] **Step 1: Inspect current display update code**
 
 Run:
 
@@ -50,7 +50,7 @@ grep -n "const updateStatus\|updateStatus(ctx)\|session_shutdown\|ctx.ui.setStat
 
 Expected: output shows `const updateStatus = (ctx: UiContext) => { ... }`, `ctx.ui.setStatus("permissions", ...)`, `updateStatus(ctx)` in `applyMode`, and `updateStatus(ctx)` in `session_start`. There is no existing `session_shutdown` handler for permissions display.
 
-- [ ] **Step 2: Add display model types and constants**
+- [x] **Step 2: Add display model types and constants**
 
 In `extensions/index.ts`, immediately after the existing `interface ModeDefinition` block, add:
 
@@ -72,7 +72,7 @@ const POWERBAR_SEGMENT_LABEL = "Permissions";
 
 Expected: these additions are type-only/display-only and do not alter permission policy.
 
-- [ ] **Step 3: Register the powerbar segment during extension load**
+- [x] **Step 3: Register the powerbar segment during extension load**
 
 In `permissionExtension`, after the two `pi.registerFlag(...)` calls and before `const config = await loadConfig();`, add:
 
@@ -94,7 +94,7 @@ Expected surrounding structure:
   const config = await loadConfig();
 ```
 
-- [ ] **Step 4: Replace `updateStatus` with shared display update helpers in the factory closure**
+- [x] **Step 4: Replace `updateStatus` with shared display update helpers in the factory closure**
 
 Replace the existing `const updateStatus = (ctx: UiContext) => { ... };` closure with:
 
@@ -118,7 +118,7 @@ Replace the existing `const updateStatus = (ctx: UiContext) => { ... };` closure
 
 Expected: `hideDefaultMode` now clears both powerbar and Pi status. Normal mode display updates both channels.
 
-- [ ] **Step 5: Update existing mode display call sites**
+- [x] **Step 5: Update existing mode display call sites**
 
 In `applyMode`, replace:
 
@@ -147,7 +147,7 @@ with:
 
 Expected: mode changes and startup both publish to powerbar and Pi status.
 
-- [ ] **Step 6: Clear the powerbar segment on session shutdown**
+- [x] **Step 6: Clear the powerbar segment on session shutdown**
 
 After the `session_start` handler and before `pi.registerShortcut("shift+tab", ...)`, add:
 
@@ -159,7 +159,7 @@ After the `session_start` handler and before `pi.registerShortcut("shift+tab", .
 
 Expected: reloads and shutdowns do not leave stale `permissions` segment data in `pi-powerbar`.
 
-- [ ] **Step 7: Add top-level display helper functions**
+- [x] **Step 7: Add top-level display helper functions**
 
 After `getModeMeta()` and before `enforcePlanMode(...)`, add these top-level helpers:
 
@@ -223,7 +223,7 @@ function updatePiStatus(ctx: UiContext, display: ModeDisplay): void {
 
 Expected: no imports are added. `pi.events.emit(...)` is safe when `pi-powerbar` is absent.
 
-- [ ] **Step 8: Verify no old `updateStatus` references remain**
+- [x] **Step 8: Verify no old `updateStatus` references remain**
 
 Run:
 
@@ -241,7 +241,7 @@ grep -n "powerbar:\|POWERBAR_SEGMENT\|ModeDisplay\|updateModeDisplay\|session_sh
 
 Expected: output shows the new constants, interface, registration/update helpers, factory-load registration, `session_start` registration/update, `session_shutdown` cleanup, and `updateModeDisplay` call sites.
 
-- [ ] **Step 9: Run typecheck after code changes**
+- [x] **Step 9: Run typecheck after code changes**
 
 Run:
 
@@ -269,7 +269,7 @@ Expected exit code: `0`.
 - Consumes: powerbar segment id `permissions`, label `Permissions`, manual `/extension-settings` enablement behavior from Task 1.
 - Produces: README instructions for users who run `pi-powerbar` and want to display the active permission mode.
 
-- [ ] **Step 1: Update feature summary in README**
+- [x] **Step 1: Update feature summary in README**
 
 In `README.md`, replace this bullet:
 
@@ -285,7 +285,7 @@ with:
 
 Expected: summary mentions both fallback status and powerbar support.
 
-- [ ] **Step 2: Add a Powerbar visibility section**
+- [x] **Step 2: Add a Powerbar visibility section**
 
 In `README.md`, after the paragraph that explains `planModeAllowedMcpServers`, add:
 
@@ -312,7 +312,7 @@ The segment uses the same short Claude-like labels as the built-in status fallba
 
 Expected: README clearly states manual enablement and does not claim the extension mutates powerbar settings.
 
-- [ ] **Step 3: Verify README formatting**
+- [x] **Step 3: Verify README formatting**
 
 Run:
 
@@ -322,7 +322,7 @@ grep -n "Powerbar visibility\|permissions\|Permissions\|⏵⏵⏵⏵ Bypass" REA
 
 Expected: output shows the new section title, segment id, segment label, and bypass display row.
 
-- [ ] **Step 4: Verify source/doc diff scope**
+- [x] **Step 4: Verify source/doc diff scope**
 
 Run:
 
@@ -332,7 +332,7 @@ git diff -- extensions/index.ts README.md
 
 Expected: diff only adds display helpers/lifecycle wiring in `extensions/index.ts` and powerbar documentation in `README.md`. No permission enforcement branch changes in `tool_call`, `enforcePlanMode`, `enforceCustomMode`, or `promptApproval`.
 
-- [ ] **Step 5: Run package dry-run**
+- [x] **Step 5: Run package dry-run**
 
 Run:
 
@@ -348,7 +348,7 @@ npm notice 📦  @mkozhin/pi-claude-permissions@0.1.0
 
 Expected exit code: `0`.
 
-- [ ] **Step 6: Smoke-test extension loading**
+- [x] **Step 6: Smoke-test extension loading**
 
 Run:
 
@@ -364,7 +364,7 @@ No models matching "__no_such_model__"
 
 Expected exit code: `0`.
 
-- [ ] **Step 7: Commit the powerbar visibility integration**
+- [x] **Step 7: Commit the powerbar visibility integration**
 
 Run:
 
@@ -374,6 +374,22 @@ git commit -m "feat: publish permission mode to powerbar"
 ```
 
 Expected: commit succeeds and includes only `extensions/index.ts` and `README.md` changes for the powerbar visibility integration.
+
+## Execution Results
+
+Completed on 2026-06-22.
+
+- Implementation committed as `d84de14 feat: publish permission mode to powerbar`.
+- Added `ModeDisplay`, `POWERBAR_SEGMENT_ID`, and `POWERBAR_SEGMENT_LABEL`.
+- Registered the `permissions` powerbar segment during extension load and on `session_start`.
+- Replaced `updateStatus` with shared display helpers that update powerbar and Pi status fallback.
+- Added `session_shutdown` cleanup for the powerbar segment.
+- Added top-level display helpers and short `Bypass` label for `bypassPermissions`.
+- Updated README with powerbar setup instructions and manual `/extension-settings` enablement.
+- `grep -n "updateStatus" extensions/index.ts || true` produced no output.
+- `npm run typecheck` passed with exit code 0.
+- `npm run pack:dry` passed with exit code 0.
+- `PI_OFFLINE=1 pi -e ./ --no-context-files --no-session --list-models '__no_such_model__'` passed with output `No models matching "__no_such_model__"`.
 
 ---
 
