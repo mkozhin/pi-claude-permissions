@@ -233,10 +233,10 @@
 - Modify: `README.md` if final behavior differs from earlier docs edits
 - Modify: `docs/plans/20260623-default-read-allowlist.md`
 
-- [ ] Ensure README reflects final exact mode names, display labels, config examples, and safety semantics.
-- [ ] Ensure this plan file records any scope changes or blockers discovered during implementation.
-- [ ] Check `git diff -- extensions/index.ts README.md tests docs/plans/20260623-default-read-allowlist.md package.json` and avoid staging unrelated pre-existing changes.
-- [ ] Ensure plan is ready to move to `docs/plans/completed/` after execution.
+- [x] Ensure README reflects final exact mode names, display labels, config examples, and safety semantics.
+- [x] Ensure this plan file records any scope changes or blockers discovered during implementation.
+- [x] Check `git diff -- extensions/index.ts README.md tests docs/plans/20260623-default-read-allowlist.md package.json` and avoid staging unrelated pre-existing changes.
+- [x] Ensure plan is ready to move to `docs/plans/completed/` after execution.
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes.*
