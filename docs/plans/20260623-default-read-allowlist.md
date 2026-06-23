@@ -205,12 +205,12 @@
 - Modify: `README.md`
 - Test: `README.md` documentation review by diff
 
-- [ ] Add a `### strict` section documenting it as the strongest confirmation mode and the replacement for old broad-prompt `default` behavior.
-- [ ] Update the `### default` section to describe allowed ordinary reads/searches, sensitive-read prompting, always-allowed `manage_todo_list`/`ask_user`, and continued prompting for writes/mutating bash.
-- [ ] Update configuration examples, default Shift+Tab cycle explanation, and valid built-in mode list to state that `strict` is selectable in `/permissions` and included in the default Shift+Tab cycle unless config overrides it.
-- [ ] Update powerbar display table to include `strict` with its status label.
-- [ ] Review README diff to ensure docs match actual behavior.
-- [ ] Run `npm run typecheck` — must pass before next task.
+- [x] Add a `### strict` section documenting it as the strongest confirmation mode and the replacement for old broad-prompt `default` behavior.
+- [x] Update the `### default` section to describe allowed ordinary reads/searches, sensitive-read prompting, always-allowed `manage_todo_list`/`ask_user`, and continued prompting for writes/mutating bash.
+- [x] Update configuration examples, default Shift+Tab cycle explanation, and valid built-in mode list to state that `strict` is selectable in `/permissions` and included in the default Shift+Tab cycle unless config overrides it.
+- [x] Update powerbar display table to include `strict` with its status label.
+- [x] Review README diff to ensure docs match actual behavior.
+- [x] Run `npm run typecheck` — must pass before next task.
 
 ### Task 8: Verify acceptance criteria
 

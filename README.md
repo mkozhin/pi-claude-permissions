@@ -19,12 +19,24 @@ Upstream is preserved as the `upstream` git remote so we can pull fixes later, w
 
 ### `default`
 
-Confirmation mode.
+Day-to-day confirmation mode.
 
-- Prompts before every tool call.
+- Allows ordinary read/search/list operations without confirmation: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`, and safe read-only `bash` commands such as `ls`, `grep`, `cat`, `git status`, and `git diff`.
+- Prompts before reading likely-secret paths such as `.env*`, `.ssh`, `.aws`, `.gnupg`, `.gpg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, and credential/token/secret/private-key/auth-named files.
+- Allows workflow tools `manage_todo_list` and `ask_user` without confirmation.
+- Prompts before `write`, `edit`, and mutating or suspicious `bash` commands.
 - Keeps session-level approvals for prompted operations.
 - Still blocks protected paths and catastrophic commands.
 - This is the startup default for this fork.
+
+### `strict`
+
+Strongest confirmation mode.
+
+- Prompts before almost every tool call, matching the old broad-prompt `default` behavior.
+- Keeps session-level approvals for prompted operations.
+- Still blocks protected paths and catastrophic commands.
+- Use this when you want maximum confirmation instead of the more practical day-to-day `default` mode.
 
 ### `plan`
 
@@ -102,18 +114,18 @@ Set this in `~/.pi/agent/settings.json` or project-local `.pi/settings.json`:
   "piClaudePermissions": {
     "defaultMode": "default",
     "allowCatastrophic": false,
-    "shiftTabOptions": ["default", "plan", "acceptEdits", "bypassPermissions"],
+    "shiftTabOptions": ["default", "plan", "acceptEdits", "bypassPermissions", "strict"],
     "hideDefaultMode": false,
     "planModeAllowedMcpServers": []
   }
 }
 ```
 
-`defaultMode` controls the startup mode and defaults to `default` in this fork. Valid built-in values are `default`, `plan`, `acceptEdits`, and `bypassPermissions`. Set it explicitly if you want a different startup mode.
+`defaultMode` controls the startup mode and defaults to `default` in this fork. Valid built-in values are `default`, `plan`, `acceptEdits`, `bypassPermissions`, and `strict`. Set it explicitly if you want a different startup mode.
 
 `allowCatastrophic` defaults to `false`. When set to `true`, catastrophic command blocking and critical `rm -rf` detection are allowed. Protected path checks still run.
 
-`shiftTabOptions` controls only the `Shift+Tab` cycle. `/permissions` still lists every mode.
+`shiftTabOptions` controls only the `Shift+Tab` cycle. If you omit it, the default cycle includes every built-in mode, including `strict`. If you configure it yourself, include `strict` there if you want it in the cycle. `/permissions` still lists and can select every mode, including `strict`.
 
 `hideDefaultMode` hides the footer/status indicator when the active mode equals the configured default.
 
@@ -137,6 +149,7 @@ The segment uses the same short Claude-like labels as the built-in status fallba
 | `plan` | `⏸ Plan` |
 | `acceptEdits` | `⏵⏵ Accept Edits` |
 | `bypassPermissions` | `⏵⏵⏵⏵ Bypass` |
+| `strict` | `⏵! Strict` |
 
 The extension also supports `customModes` for project-specific policies. We can shape this further as our needs become clear.
 
