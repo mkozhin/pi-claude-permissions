@@ -1,5 +1,7 @@
 # Default Read Allowlist and Strict Permission Mode
 
+Status: Completed on 2026-06-23.
+
 ## Overview
 - Add a new built-in `strict` permission mode that preserves the current maximum-confirmation behavior: prompt before almost every tool call unless a hard safety block applies or a session approval exists.
 - Change the built-in `default` mode into a practical day-to-day confirmation mode: allow ordinary read/search/list operations without prompting, keep prompting for writes and mutating/suspicious bash, and prompt before reading likely-secret paths.
@@ -71,7 +73,7 @@
 - Introduce helpers with narrow responsibilities:
   - `isAlwaysAllowedWorkflowTool(toolName)` for `manage_todo_list` and `ask_user`.
   - `isDefaultAllowedReadTool(toolName, input, ctx, home)` for ordinary read/search/list tools.
-  - `findSensitiveReadReason(toolName, input, ctx, home)` for secret-like read paths and bash commands.
+  - `hasSensitiveDirectReadPath(...)` / `hasSensitiveBashReadPath(...)` for secret-like read paths and bash commands.
   - Prefer a dedicated `isSafeDefaultReadCommand(command)` for default mode. Reuse `isSafePlanCommand()` only if implementation verifies it permits only ordinary read/list/search commands and does not include broader plan-mode conveniences.
 - The tool-call decision order must preserve safety precedence explicitly:
   1. Enforce always-on safety blocks before any allowlist, session approval, custom policy allow, plan-mode allow, or bypass-mode allow can return.
@@ -153,7 +155,7 @@
 - Test: `tests/permission-modes.test.cjs` or existing harness test file
 
 - [x] Define the direct default read allowlist: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`.
-- [x] Allow those tools in `default` only when `findSensitiveReadReason(...)` returns no reason.
+- [x] Allow those tools in `default` only when sensitive-read helpers report no sensitive path.
 - [x] Allow safe read-only bash in `default` using a dedicated `isSafeDefaultReadCommand()` predicate, or reuse `isSafePlanCommand()` only after verifying it allows only ordinary read/list/search behavior suitable for `default`.
 - [x] Add tests for allowed direct reads/searches and safe bash commands such as `ls`, `grep`, `cat`, `git status`, and `git diff`.
 - [x] Add tests that shell metacharacters/redirection/chaining do not bypass prompting: `cat file > out`, `grep x file | tee out`, `find . -exec rm {} \\;`, command substitution with mutation, and semicolon/`&&` mutation chains.

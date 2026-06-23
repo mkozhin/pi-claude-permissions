@@ -100,10 +100,12 @@ const SENSITIVE_CREDENTIAL_PATH_SEGMENTS = new Set([".ssh", ".aws", ".gnupg", ".
 const SENSITIVE_CREDENTIAL_FILES = new Set([".npmrc", ".netrc"]);
 const SENSITIVE_FILE_STEMS = new Set(["credential", "credentials", "token", "tokens", "secret", "secrets", "auth", "id_rsa", "id_ed25519"]);
 const SEARCH_PATTERN_COMMANDS = new Set(["grep", "rg", "sed", "awk", "jq"]);
-const DEFAULT_SAFE_BASH_READ_PATTERNS = [
-  /^(?:cat|head|tail|less|more|grep|rg|find|ls|pwd|wc|sort|uniq|diff|file|stat|du|df|tree|which|whereis|type|echo|printf|jq|sed|awk|fd|bat|eza)(?:\s|$)/,
-  /^git\s+(?:status|log|diff|show|branch|remote|ls-files|ls-tree|config\s+--get)(?:\s|$)/,
-];
+const DEFAULT_SAFE_BASH_COMMANDS = new Set([
+  "cat", "head", "tail", "less", "more", "grep", "rg", "find", "ls",
+  "pwd", "wc", "sort", "uniq", "diff", "file", "stat", "du", "df",
+  "tree", "which", "whereis", "type", "echo", "printf", "jq", "fd",
+  "bat", "eza",
+]);
 
 const SAFE_PLAN_BASH_PREFIXES = [
   "cat", "head", "tail", "less", "more", "grep", "find", "ls",
@@ -763,7 +765,7 @@ async function enforceAlwaysOnSafety(args: {
       }
     }
 
-    const protectedPath = protectedPaths.find((path) => command.includes(path) || command.includes(path.replace(home, "~")));
+    const protectedPath = findProtectedBashPath(command, home, protectedPaths);
     if (protectedPath) {
       const readable = protectedPath.replace(home, "~");
       ctx.ui.notify(`🚫 Blocked bash targeting protected path: ${readable}`, "error");
@@ -786,36 +788,40 @@ function isSessionAllowed(toolName: string, input: Record<string, unknown>, sess
   return sessionAllow.tools.has(toolName);
 }
 
+function findProtectedBashPath(command: string, home: string, protectedPaths: string[]): string | undefined {
+  const commandForms = [command, normalizeShellPathText(command, home)];
+  return protectedPaths.find((path) =>
+    commandForms.some((form) => form.includes(path) || form.includes(path.replace(home, "~"))),
+  );
+}
+
 function isDefaultPreApprovedToolCall(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
   return DEFAULT_ALWAYS_ALLOWED_TOOLS.has(toolName) || isDefaultAllowedReadTool(toolName, input, ctx, home);
 }
 
 function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
   if (toolName === "bash") {
-    return findSensitiveReadReason(toolName, input, ctx, home) === undefined
+    return !hasSensitiveBashReadPath(String(input.command ?? ""), ctx, home)
       && isSafeDefaultReadCommand(String(input.command ?? ""));
   }
   if (!DEFAULT_READ_TOOLS.has(toolName)) return false;
-  return findSensitiveReadReason(toolName, input, ctx, home) === undefined;
+  return !hasSensitiveDirectReadPath(toolName, input, ctx, home);
 }
 
-function findSensitiveReadReason(
-  toolName: string,
-  input: Record<string, unknown>,
-  ctx: UiContext,
-  home: string,
-): string | undefined {
-  const sensitivePath = toolName === "bash"
-    ? findSensitiveBashReadPath(String(input.command ?? ""), ctx, home)
-    : findSensitiveDirectReadPath(input, ctx, home);
+function hasSensitiveDirectReadPath(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
+  const paths = getDirectReadPathInputs(input);
 
-  return sensitivePath ? `sensitive read path: ${sensitivePath}` : undefined;
-}
-
-function findSensitiveDirectReadPath(input: Record<string, unknown>, ctx: UiContext, home: string): string | undefined {
-  for (const path of getDirectReadPathInputs(input)) {
-    if (isSensitiveReadPath(path, ctx, home)) return path;
+  for (const path of paths) {
+    if (isSensitiveReadPath(path, ctx, home)) return true;
   }
+
+  if (paths.length === 0 && isSensitiveReadPath(ctx.cwd ?? process.cwd(), ctx, home)) return true;
+
+  for (const path of getDirectReadNamePatternInputs(toolName, input)) {
+    if (isSensitiveReadPath(path, ctx, home)) return true;
+  }
+
+  return false;
 }
 
 function getDirectReadPathInputs(input: Record<string, unknown>): string[] {
@@ -835,8 +841,20 @@ function collectStringValues(value: unknown, output: string[]): void {
   }
 }
 
+function getDirectReadNamePatternInputs(toolName: string, input: Record<string, unknown>): string[] {
+  if (toolName !== "find" && toolName !== "fd" && toolName !== "ls" && toolName !== "eza") return [];
+  const patterns: string[] = [];
+  collectStringValues(input.pattern, patterns);
+  collectStringValues(input.name, patterns);
+  return patterns;
+}
+
+function hasSensitiveBashReadPath(command: string, ctx: UiContext, home: string): boolean {
+  return findSensitiveBashReadPath(command, ctx, home) !== undefined;
+}
+
 function findSensitiveBashReadPath(command: string, ctx: UiContext, home: string): string | undefined {
-  for (const segment of command.split("|")) {
+  for (const segment of normalizeShellPathText(command, home).split("|")) {
     for (const candidate of getBashPathCandidates(segment)) {
       if (isSensitiveReadPath(candidate, ctx, home)) return candidate;
     }
@@ -857,6 +875,16 @@ function getBashPathCandidates(segment: string): string[] {
   if (SEARCH_PATTERN_COMMANDS.has(commandName)) return getPatternThenPathCandidates(args);
 
   return getGenericPathCandidates(args);
+}
+
+function normalizeShellPathText(value: string, home: string): string {
+  return value
+    .replace(/\$\{HOME\}/g, home)
+    .replace(/\$HOME\b/g, home)
+    .replace(/\$'([^']*)'/g, "$1")
+    .replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/g, (_match, content: string) => content.replace(/\\(.)/g, "$1"))
+    .replace(/'([^']*)'/g, "$1")
+    .replace(/\\([^\s])/g, "$1");
 }
 
 function tokenizeShellLike(value: string): string[] {
@@ -968,16 +996,64 @@ function hasUnsafeDefaultShellSyntax(command: string): boolean {
   return /[\r\n;]/.test(command)
     || /&&|\|\|/.test(command)
     || /`|\$\s*\(|<\(|>\(/.test(command)
-    || /\bfind\b[^|]*\s-exec(?:\s|$)/i.test(command)
-    || /\bsed\b[^|]*\s-i(?:\s|$)/i.test(command)
-    || /\b(?:sudo\s+)?(?:rm|mv|cp|chmod|chown|mkdir|rmdir|touch|truncate|ln|tee|sponge|dd|install|patch)\b/i.test(command)
-    || /\bgit\s+(?:add|apply|checkout|clean|commit|merge|mv|pull|push|rebase|reset|restore|rm|switch)\b/i.test(command)
+    || /\$(?!HOME\b|\{HOME\})/.test(command)
+    || /["'\\]/.test(command)
     || /\b(?:npm|pnpm|yarn|bun)\s+(?:add|install|i|ci|run|exec|publish|remove|uninstall|update)\b/i.test(command)
     || /\b(?:python|python3|node|ruby|perl|php|deno|bun)\s+-[ce]\b/i.test(command);
 }
 
 function isSafeDefaultReadCommandSegment(segment: string): boolean {
-  return DEFAULT_SAFE_BASH_READ_PATTERNS.some((pattern) => pattern.test(segment));
+  const tokens = tokenizeShellLike(segment);
+  const commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
+  if (commandIndex < 0) return false;
+
+  const commandName = getCommandName(tokens[commandIndex]!);
+  const args = tokens.slice(commandIndex + 1);
+
+  if (commandName === "git") return isSafeDefaultGitCommand(args);
+  if (!DEFAULT_SAFE_BASH_COMMANDS.has(commandName)) return false;
+  return !hasUnsafeDefaultReadOptions(commandName, args);
+}
+
+function isSafeDefaultGitCommand(args: string[]): boolean {
+  const subcommand = args[0];
+  if (!subcommand) return false;
+  const rest = args.slice(1);
+
+  if (subcommand === "status" || subcommand === "log" || subcommand === "show" || subcommand === "ls-files" || subcommand === "ls-tree") return true;
+  if (subcommand === "diff") return !hasOption(rest, "--output");
+  if (subcommand === "config") return rest[0] === "--get";
+  if (subcommand === "remote") return rest.length === 0 || rest.every((arg) => arg === "-v" || arg === "--verbose");
+  if (subcommand === "branch") {
+    return rest.every((arg) =>
+      ["-a", "-r", "-v", "-vv", "--all", "--remotes", "--show-current", "--contains", "--merged", "--no-merged"].includes(arg),
+    );
+  }
+
+  return false;
+}
+
+function hasUnsafeDefaultReadOptions(commandName: string, args: string[]): boolean {
+  if (commandName === "find") {
+    return args.some((arg) => /^-(?:delete|exec(?:dir)?|ok(?:dir)?|fls|fprint0?|fprintf)$/.test(arg));
+  }
+
+  if (commandName === "fd") {
+    return args.some((arg) =>
+      arg === "-x" || arg === "-X" || arg === "--exec" || arg === "--exec-batch"
+      || arg.startsWith("--exec=") || arg.startsWith("--exec-batch="),
+    );
+  }
+
+  if (commandName === "sort") return hasOption(args, "-o") || hasOption(args, "--output");
+  if (commandName === "diff") return hasOption(args, "--output");
+  if (commandName === "rg") return hasOption(args, "--pre");
+
+  return false;
+}
+
+function hasOption(args: string[], option: string): boolean {
+  return args.some((arg) => arg === option || arg.startsWith(`${option}=`) || (option.length === 2 && arg.startsWith(option) && arg.length > 2));
 }
 
 function isSafePlanCommand(command: string): boolean {

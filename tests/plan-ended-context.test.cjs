@@ -90,8 +90,8 @@ async function createHarness(options = {}) {
   };
 
   const ctx = {
-    hasUI: true,
-    cwd: process.cwd(),
+    hasUI: options.hasUI ?? true,
+    cwd: options.cwd ?? process.cwd(),
     ui: {
       notify() {},
       setStatus(name, value) {
@@ -252,7 +252,15 @@ async function testDefaultAllowsSafeReadOnlyBashWithoutPrompt() {
   h.setFlag("permission-mode", "default");
   await h.sessionStart();
 
-  for (const command of ["ls", "grep strict README.md", "cat README.md", "git status", "git diff"]) {
+  for (const command of [
+    "ls",
+    "grep strict README.md",
+    "grep rm README.md",
+    "rg touch .",
+    "cat README.md",
+    "git status",
+    "git diff",
+  ]) {
     const result = await h.toolCall("bash", { command });
     assert.equal(result, undefined, `default should allow safe read-only bash: ${command}`);
   }
@@ -265,6 +273,11 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     "cat README.md > out.txt",
     "grep strict README.md | tee out.txt",
     "find . -exec rm {} \\;",
+    "find . -delete",
+    "find . -fprint out.txt",
+    "sort -o out.txt README.md",
+    "git diff --output=out.patch",
+    "sed -n 'w out.txt' README.md",
     "cat $(touch generated.txt)",
     "cat README.md; touch generated.txt",
     "cat README.md && touch generated.txt",
@@ -301,29 +314,51 @@ async function testDefaultPromptsForWritesEditsAndMutatingBash() {
 }
 
 async function testDefaultPromptsForSensitiveDirectReads() {
-  for (const path of [
-    ".env",
-    ".env.local",
-    "~/.ssh/config",
-    ".aws/credentials",
-    ".npmrc",
-    ".netrc",
-    ".kube/config",
-    "config/token.txt",
-    "credentials.json",
-    "private-key.pem",
-    "auth.json",
+  for (const [toolName, input] of [
+    ["read", { path: ".env" }],
+    ["read", { path: ".env.local" }],
+    ["read", { path: "~/.ssh/config" }],
+    ["read", { path: ".aws/credentials" }],
+    ["read", { path: ".npmrc" }],
+    ["read", { path: ".netrc" }],
+    ["read", { path: ".kube/config" }],
+    ["read", { path: "config/token.txt" }],
+    ["read", { path: "credentials.json" }],
+    ["read", { path: "private-key.pem" }],
+    ["read", { path: "auth.json" }],
+    ["grep", { pattern: "needle", path: ".env" }],
+    ["find", { path: ".aws" }],
+    ["find", { path: ".", pattern: ".env" }],
+    ["ls", { paths: ["README.md", "~/.ssh/config"] }],
+    ["rg", { pattern: "needle", files: ["README.md", "credentials.json"] }],
+    ["fd", { pattern: "credentials" }],
+    ["bat", { file: ".npmrc" }],
+    ["eza", { glob: "private-key.pem" }],
   ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "default");
     await h.sessionStart();
 
-    const result = await h.toolCall("read", { path });
+    const result = await h.toolCall(toolName, input);
 
-    assert.equal(h.selectCallCount(), 1, `default should prompt for sensitive read path: ${path}`);
+    assert.equal(h.selectCallCount(), 1, `default should prompt for sensitive ${toolName} input: ${JSON.stringify(input)}`);
     assert.equal(result?.block, true);
-    assert.equal(result?.reason, "User denied read");
-    assert.equal(h.lastSelectPrompt(), "🔒 read");
+    assert.equal(result?.reason, `User denied ${toolName}`);
+    assert.equal(h.lastSelectPrompt(), `🔒 ${toolName}`);
+  }
+}
+
+async function testDefaultPromptsForImplicitSensitiveCwdReads() {
+  for (const toolName of ["read", "grep", "find", "ls", "rg", "fd", "bat", "eza"]) {
+    const h = await createHarness({ cwd: `${TEST_HOME}/.ssh` });
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall(toolName, {});
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt for ${toolName} with sensitive cwd`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, `User denied ${toolName}`);
   }
 }
 
@@ -331,7 +366,14 @@ async function testDefaultPromptsForSensitiveBashReads() {
   for (const command of [
     "cat .env",
     "cat .env.local",
+    "cat .e\"nv\"",
+    "cat $'.env'",
     "grep token .ssh/config",
+    "find .aws -type f",
+    "fd config .kube",
+    "sed -n p .env",
+    "awk pattern credentials.json",
+    "jq . auth.json",
     "cat .aws/credentials",
     "cat credentials.json",
     "git diff .env",
@@ -411,6 +453,11 @@ async function testCatastrophicBashRunsBeforeAllowBranches() {
     { label: "bypass allow path", mode: "bypassPermissions", command: "cat sudo mkfs" },
     { label: "default read allowlist path", mode: "default", command: "cat sudo mkfs" },
     { label: "strict prompt path", mode: "strict", command: "cat sudo mkfs" },
+    { label: "plan critical rm path", mode: "plan", command: "rm -rf /" },
+    { label: "custom policy critical rm path", mode: "customAllow", command: "rm -rf ~", localConfig: customModeConfig },
+    { label: "bypass critical rm path", mode: "bypassPermissions", command: "sudo rm -rf /usr" },
+    { label: "default critical rm path", mode: "default", command: "rm -rf /tmp" },
+    { label: "strict critical rm path", mode: "strict", command: "rm -rf /var" },
   ]) {
     const h = await createHarness({ localConfig: testCase.localConfig });
     h.setFlag("permission-mode", testCase.mode);
@@ -441,6 +488,9 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "bypass write allow path", mode: "bypassPermissions", toolName: "write", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
     { label: "acceptEdits edit allow path", mode: "acceptEdits", toolName: "edit", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
     { label: "default bash read allowlist path", mode: "default", toolName: "bash", input: { command: "cat ~/.ssh/config" } },
+    { label: "bypass bash $HOME protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/.ssh/config" } },
+    { label: "strict bash ${HOME} protected path", mode: "strict", toolName: "bash", input: { command: "cat ${HOME}/.ssh/config" } },
+    { label: "default bash quoted protected path", mode: "default", toolName: "bash", input: { command: "cat ~/\".ssh\"/config" } },
   ]) {
     const h = await createHarness({ localConfig: testCase.localConfig });
     h.setFlag("permission-mode", testCase.mode);
@@ -503,6 +553,24 @@ async function testSessionApprovalsStillWorkAfterSafetyPasses() {
   assert.equal(strictCommand.selectCallCount(), 1, "strict command session approval should suppress second prompt");
 }
 
+async function testPromptRequiredCallsBlockWithoutUi() {
+  for (const [mode, toolName, input] of [
+    ["default", "write", { path: "generated.txt" }],
+    ["default", "bash", { command: "touch generated.txt" }],
+    ["strict", "read", { path: "README.md" }],
+  ]) {
+    const h = await createHarness({ hasUI: false });
+    h.setFlag("permission-mode", mode);
+    await h.sessionStart();
+
+    const result = await h.toolCall(toolName, input);
+
+    assert.equal(h.selectCallCount(), 0, `${mode} ${toolName} should not prompt without UI`);
+    assert.equal(result?.block, true);
+    assert.match(result?.reason, /no UI for confirmation/);
+  }
+}
+
 async function testCyclingThroughPlanDoesNotInjectEndedContext() {
   const h = await createHarness();
   await h.sessionStart();
@@ -540,6 +608,7 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testDefaultPromptsForUnsafeBashSyntax();
   await testDefaultPromptsForWritesEditsAndMutatingBash();
   await testDefaultPromptsForSensitiveDirectReads();
+  await testDefaultPromptsForImplicitSensitiveCwdReads();
   await testDefaultPromptsForSensitiveBashReads();
   await testDefaultAllowsOrdinaryDotPathReadsWithoutPrompt();
   await testDefaultAllowsWorkflowToolsWithoutPrompt();
@@ -548,6 +617,7 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testProtectedPathsRunBeforeAllowAndDenyBranches();
   await testSessionApprovalsDoNotBypassProtectedPaths();
   await testSessionApprovalsStillWorkAfterSafetyPasses();
+  await testPromptRequiredCallsBlockWithoutUi();
   await testCyclingThroughPlanDoesNotInjectEndedContext();
   await testLeavingAfterPlanTurnInjectsEndedContext();
   console.log("plan-ended-context tests passed");
