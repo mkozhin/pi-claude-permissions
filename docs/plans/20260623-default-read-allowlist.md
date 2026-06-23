@@ -218,14 +218,14 @@
 - Modify: `docs/plans/20260623-default-read-allowlist.md` if implementation scope changes during execution
 - Test: full repo validation commands
 
-- [ ] Verify all requirements from Overview are implemented.
-- [ ] Verify `strict` preserves old current-`default` broad prompt behavior.
-- [ ] Verify catastrophic and protected-path safety checks run before all allowlists, session approvals, custom mode allowances, plan mode allowances, and bypass behavior.
-- [ ] Verify `default` allows ordinary reads/search/list, prompts for sensitive reads, allows `manage_todo_list`/`ask_user`, and still prompts for writes/mutating bash.
-- [ ] Run full test suite: `npm run test`.
-- [ ] Run typecheck: `npm run typecheck`.
-- [ ] Run package dry-run: `npm run pack:dry`.
-- [ ] Optionally run extension load smoke test: `PI_OFFLINE=1 pi -e ./ --no-context-files --no-session --list-models '__no_such_model__'`.
+- [x] Verify all requirements from Overview are implemented.
+- [x] Verify `strict` preserves old current-`default` broad prompt behavior.
+- [x] Verify catastrophic and protected-path safety checks run before all allowlists, session approvals, custom mode allowances, plan mode allowances, and bypass behavior.
+- [x] Verify `default` allows ordinary reads/search/list, prompts for sensitive reads, allows `manage_todo_list`/`ask_user`, and still prompts for writes/mutating bash.
+- [x] Run full test suite: `npm run test`.
+- [x] Run typecheck: `npm run typecheck`.
+- [x] Run package dry-run: `npm run pack:dry`.
+- [x] Optionally run extension load smoke test: `PI_OFFLINE=1 pi -e ./ --no-context-files --no-session --list-models '__no_such_model__'`.
 
 ### Task 9: [Final] Update documentation and prepare completion
 
