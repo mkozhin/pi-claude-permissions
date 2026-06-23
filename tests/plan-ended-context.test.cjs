@@ -178,12 +178,70 @@ async function testDefaultAllowsOrdinaryReadToolsWithoutPrompt() {
     ["read", { path: "README.md" }],
     ["ls", { path: "." }],
     ["grep", { pattern: "strict", path: "README.md" }],
+    ["find", { path: ".", pattern: "*.ts" }],
+    ["rg", { pattern: "strict", path: "." }],
+    ["fd", { pattern: "README" }],
+    ["bat", { path: "README.md" }],
+    ["eza", { path: "." }],
   ]) {
     const result = await h.toolCall(toolName, input);
     assert.equal(result, undefined, `default should allow ${toolName}`);
   }
 
   assert.equal(h.selectCallCount(), 0, "default read allowlist should not invoke confirmation UI");
+}
+
+async function testDefaultAllowsSafeReadOnlyBashWithoutPrompt() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  for (const command of ["ls", "grep strict README.md", "cat README.md", "git status", "git diff"]) {
+    const result = await h.toolCall("bash", { command });
+    assert.equal(result, undefined, `default should allow safe read-only bash: ${command}`);
+  }
+
+  assert.equal(h.selectCallCount(), 0, "default safe bash allowlist should not invoke confirmation UI");
+}
+
+async function testDefaultPromptsForUnsafeBashSyntax() {
+  for (const command of [
+    "cat README.md > out.txt",
+    "grep strict README.md | tee out.txt",
+    "find . -exec rm {} \\;",
+    "cat $(touch generated.txt)",
+    "cat README.md; touch generated.txt",
+    "cat README.md && touch generated.txt",
+  ]) {
+    const h = await createHarness();
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall("bash", { command });
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt for unsafe bash: ${command}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, "User denied bash");
+    assert.equal(h.lastSelectPrompt(), `🔒 bash: ${command}`);
+  }
+}
+
+async function testDefaultPromptsForWritesEditsAndMutatingBash() {
+  for (const [toolName, input] of [
+    ["write", { path: "generated.txt" }],
+    ["edit", { path: "README.md" }],
+    ["bash", { command: "touch generated.txt" }],
+  ]) {
+    const h = await createHarness();
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall(toolName, input);
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt for ${toolName}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, `User denied ${toolName}`);
+  }
 }
 
 async function testCyclingThroughPlanDoesNotInjectEndedContext() {
@@ -219,6 +277,9 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testPermissionsCommandListsStrict();
   await testStrictPromptsForOrdinaryReadTools();
   await testDefaultAllowsOrdinaryReadToolsWithoutPrompt();
+  await testDefaultAllowsSafeReadOnlyBashWithoutPrompt();
+  await testDefaultPromptsForUnsafeBashSyntax();
+  await testDefaultPromptsForWritesEditsAndMutatingBash();
   await testCyclingThroughPlanDoesNotInjectEndedContext();
   await testLeavingAfterPlanTurnInjectsEndedContext();
   console.log("plan-ended-context tests passed");

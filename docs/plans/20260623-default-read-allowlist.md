@@ -152,13 +152,13 @@
 - Modify: `extensions/index.ts`
 - Test: `tests/permission-modes.test.cjs` or existing harness test file
 
-- [ ] Define the direct default read allowlist: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`.
-- [ ] Allow those tools in `default` only when `findSensitiveReadReason(...)` returns no reason.
-- [ ] Allow safe read-only bash in `default` using a dedicated `isSafeDefaultReadCommand()` predicate, or reuse `isSafePlanCommand()` only after verifying it allows only ordinary read/list/search behavior suitable for `default`.
-- [ ] Add tests for allowed direct reads/searches and safe bash commands such as `ls`, `grep`, `cat`, `git status`, and `git diff`.
-- [ ] Add tests that shell metacharacters/redirection/chaining do not bypass prompting: `cat file > out`, `grep x file | tee out`, `find . -exec rm {} \\;`, command substitution with mutation, and semicolon/`&&` mutation chains.
-- [ ] Add tests that `write`, `edit`, and mutating bash still prompt in `default`.
-- [ ] Run focused tests: `npm run test` — must pass before next task.
+- [x] Define the direct default read allowlist: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`.
+- [x] Allow those tools in `default` only when `findSensitiveReadReason(...)` returns no reason.
+- [x] Allow safe read-only bash in `default` using a dedicated `isSafeDefaultReadCommand()` predicate, or reuse `isSafePlanCommand()` only after verifying it allows only ordinary read/list/search behavior suitable for `default`.
+- [x] Add tests for allowed direct reads/searches and safe bash commands such as `ls`, `grep`, `cat`, `git status`, and `git diff`.
+- [x] Add tests that shell metacharacters/redirection/chaining do not bypass prompting: `cat file > out`, `grep x file | tee out`, `find . -exec rm {} \\;`, command substitution with mutation, and semicolon/`&&` mutation chains.
+- [x] Add tests that `write`, `edit`, and mutating bash still prompt in `default`.
+- [x] Run focused tests: `npm run test` — must pass before next task.
 
 ### Task 4: Prompt for sensitive reads in `default`
 

@@ -94,6 +94,10 @@ const BUILT_IN_MODES: ModeDefinition[] = [
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "rg", "fd", "bat", "eza", "mcp"];
 const GATED_TOOLS = new Set(["write", "edit", "bash"]);
 const DEFAULT_READ_TOOLS = new Set(["read", "grep", "find", "ls", "rg", "fd", "bat", "eza"]);
+const DEFAULT_SAFE_BASH_READ_PATTERNS = [
+  /^(?:cat|head|tail|less|more|grep|rg|find|ls|pwd|wc|sort|uniq|diff|file|stat|du|df|tree|which|whereis|type|echo|printf|jq|sed|awk|fd|bat|eza)(?:\s|$)/,
+  /^git\s+(?:status|log|diff|show|branch|remote|ls-files|ls-tree|config\s+--get)(?:\s|$)/,
+];
 
 const SAFE_PLAN_BASH_PREFIXES = [
   "cat", "head", "tail", "less", "more", "grep", "find", "ls",
@@ -781,6 +785,10 @@ function isDefaultPreApprovedToolCall(toolName: string, input: Record<string, un
 }
 
 function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
+  if (toolName === "bash") {
+    return findSensitiveReadReason(toolName, input, ctx, home) === undefined
+      && isSafeDefaultReadCommand(String(input.command ?? ""));
+  }
   if (!DEFAULT_READ_TOOLS.has(toolName)) return false;
   return findSensitiveReadReason(toolName, input, ctx, home) === undefined;
 }
@@ -794,6 +802,34 @@ function findSensitiveReadReason(
   return undefined;
 }
 
+
+function isSafeDefaultReadCommand(command: string): boolean {
+  const stripped = stripAllowedStderrNullRedirects(command.trim());
+  if (!stripped || hasUnsafeDefaultShellSyntax(stripped)) return false;
+  return stripped.split("|").every((segment) => isSafeDefaultReadCommandSegment(segment.trim()));
+}
+
+function stripAllowedStderrNullRedirects(command: string): string | undefined {
+  const stripped = command.replace(/(^|\s)2>\s*\/dev\/null(?=\s|$)/g, " ").trim();
+  if (/[<>]/.test(stripped)) return;
+  return stripped;
+}
+
+function hasUnsafeDefaultShellSyntax(command: string): boolean {
+  return /[\r\n;]/.test(command)
+    || /&&|\|\|/.test(command)
+    || /`|\$\s*\(|<\(|>\(/.test(command)
+    || /\bfind\b[^|]*\s-exec(?:\s|$)/i.test(command)
+    || /\bsed\b[^|]*\s-i(?:\s|$)/i.test(command)
+    || /\b(?:sudo\s+)?(?:rm|mv|cp|chmod|chown|mkdir|rmdir|touch|truncate|ln|tee|sponge|dd|install|patch)\b/i.test(command)
+    || /\bgit\s+(?:add|apply|checkout|clean|commit|merge|mv|pull|push|rebase|reset|restore|rm|switch)\b/i.test(command)
+    || /\b(?:npm|pnpm|yarn|bun)\s+(?:add|install|i|ci|run|exec|publish|remove|uninstall|update)\b/i.test(command)
+    || /\b(?:python|python3|node|ruby|perl|php|deno|bun)\s+-[ce]\b/i.test(command);
+}
+
+function isSafeDefaultReadCommandSegment(segment: string): boolean {
+  return DEFAULT_SAFE_BASH_READ_PATTERNS.some((pattern) => pattern.test(segment));
+}
 
 function isSafePlanCommand(command: string): boolean {
   const trimmed = command.trim();
