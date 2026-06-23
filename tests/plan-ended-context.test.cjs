@@ -1,9 +1,13 @@
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
-const { join } = require("node:path");
+const { join, resolve } = require("node:path");
 const ts = require("typescript");
 
-function loadExtension() {
+const TEST_HOME = "/tmp/pi-claude-permissions-home";
+
+function loadExtension(options = {}) {
+  const home = options.home ?? TEST_HOME;
+  const configFiles = options.configFiles ?? {};
   const sourcePath = join(__dirname, "..", "extensions", "index.ts");
   const source = readFileSync(sourcePath, "utf8");
   const { outputText } = ts.transpileModule(source, {
@@ -17,11 +21,50 @@ function loadExtension() {
 
   const module = { exports: {} };
   const fn = new Function("require", "module", "exports", "__dirname", "__filename", outputText);
-  fn(require, module, module.exports, join(__dirname, "..", "extensions"), sourcePath);
+  fn(mockRequireForExtension(home, configFiles), module, module.exports, join(__dirname, "..", "extensions"), sourcePath);
   return module.exports.default;
 }
 
-async function createHarness() {
+function mockRequireForExtension(home, configFiles) {
+  return (specifier) => {
+    if (specifier === "node:os") {
+      return { ...require("node:os"), homedir: () => home };
+    }
+
+    if (specifier === "node:fs/promises") {
+      return {
+        ...require("node:fs/promises"),
+        readFile: async (path) => {
+          const key = String(path);
+          if (Object.prototype.hasOwnProperty.call(configFiles, key)) return configFiles[key];
+          const error = new Error(`ENOENT: no such file or directory, open '${key}'`);
+          error.code = "ENOENT";
+          throw error;
+        },
+      };
+    }
+
+    return require(specifier);
+  };
+}
+
+function buildConfigFiles(options, home) {
+  const files = { ...(options.configFiles ?? {}) };
+  const add = (path, value) => {
+    if (value !== undefined) files[path] = JSON.stringify(value);
+  };
+
+  add(resolve(home, ".pi/agent/extensions/permissions.json"), options.globalConfig);
+  add(resolve(process.cwd(), ".pi/extensions/permissions.json"), options.localConfig);
+  add(resolve(home, ".pi/agent/settings.json"), options.globalSettings);
+  add(resolve(process.cwd(), ".pi/settings.json"), options.localSettings);
+
+  return files;
+}
+
+async function createHarness(options = {}) {
+  const home = options.home ?? TEST_HOME;
+  const selectResponses = [...(options.selectResponses ?? [])];
   const handlers = new Map();
   const shortcuts = new Map();
   const commands = new Map();
@@ -54,16 +97,17 @@ async function createHarness() {
       setStatus(name, value) {
         if (name === "permissions") permissionStatus = value;
       },
-      select(prompt, options) {
+      select(prompt, selectOptions) {
         selectCallCount += 1;
         lastSelectPrompt = prompt;
-        lastSelectOptions = options;
-        return undefined;
+        lastSelectOptions = selectOptions;
+        const response = selectResponses.length > 0 ? selectResponses.shift() : undefined;
+        return typeof response === "number" ? selectOptions[response] : response;
       },
     },
   };
 
-  const extension = loadExtension();
+  const extension = loadExtension({ home, configFiles: buildConfigFiles(options, home) });
   await extension(pi);
 
   async function emit(event, payload = {}) {
@@ -108,7 +152,19 @@ async function createHarness() {
     lastSelectOptions() { return lastSelectOptions; },
     lastSelectPrompt() { return lastSelectPrompt; },
     selectCallCount() { return selectCallCount; },
+    home() { return home; },
   };
+}
+
+function assertCatastrophicBlock(result, label) {
+  assert.equal(result?.block, true, `${label} should be blocked`);
+  assert.match(result.reason, /Catastrophic command blocked/, `${label} should report catastrophic safety`);
+}
+
+function assertProtectedPathBlock(result, label) {
+  assert.equal(result?.block, true, `${label} should be blocked`);
+  assert.match(result.reason, /protected path/i, `${label} should report protected-path safety`);
+  assert.match(result.reason, /cannot be overridden/i, `${label} should be non-overridable`);
 }
 
 async function testStrictModeCanBeSelectedByFlag() {
@@ -338,6 +394,115 @@ async function testStrictPromptsForWorkflowTools() {
   }
 }
 
+async function testCatastrophicBashRunsBeforeAllowBranches() {
+  const customModeConfig = {
+    customModes: [{
+      id: "customAllow",
+      label: "Custom Allow",
+      status: "C",
+      policy: { network: { allowLocalhostOnly: false } },
+    }],
+  };
+
+  for (const testCase of [
+    { label: "plan allow path", mode: "plan", command: "cat sudo mkfs" },
+    { label: "plan deny path", mode: "plan", command: "sudo mkfs /dev/sda" },
+    { label: "custom policy allow path", mode: "customAllow", command: "cat sudo mkfs", localConfig: customModeConfig },
+    { label: "bypass allow path", mode: "bypassPermissions", command: "cat sudo mkfs" },
+    { label: "default read allowlist path", mode: "default", command: "cat sudo mkfs" },
+    { label: "strict prompt path", mode: "strict", command: "cat sudo mkfs" },
+  ]) {
+    const h = await createHarness({ localConfig: testCase.localConfig });
+    h.setFlag("permission-mode", testCase.mode);
+    await h.sessionStart();
+
+    const result = await h.toolCall("bash", { command: testCase.command });
+
+    assertCatastrophicBlock(result, testCase.label);
+    assert.equal(h.selectCallCount(), 0, `${testCase.label} should not prompt before catastrophic block`);
+  }
+}
+
+async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
+  const customModeConfig = {
+    customModes: [{
+      id: "customAllow",
+      label: "Custom Allow",
+      status: "C",
+      policy: { network: { allowLocalhostOnly: false } },
+    }],
+  };
+
+  for (const testCase of [
+    { label: "plan safe bash allow path", mode: "plan", toolName: "bash", input: { command: "cat ~/.ssh/config" } },
+    { label: "plan write deny path", mode: "plan", toolName: "write", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
+    { label: "custom policy bash allow path", mode: "customAllow", toolName: "bash", input: { command: "cat ~/.ssh/config" }, localConfig: customModeConfig },
+    { label: "custom policy write allow path", mode: "customAllow", toolName: "write", inputForHome: (home) => ({ path: `${home}/.ssh/config` }), localConfig: customModeConfig },
+    { label: "bypass write allow path", mode: "bypassPermissions", toolName: "write", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
+    { label: "acceptEdits edit allow path", mode: "acceptEdits", toolName: "edit", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
+    { label: "default bash read allowlist path", mode: "default", toolName: "bash", input: { command: "cat ~/.ssh/config" } },
+  ]) {
+    const h = await createHarness({ localConfig: testCase.localConfig });
+    h.setFlag("permission-mode", testCase.mode);
+    await h.sessionStart();
+
+    const input = testCase.inputForHome ? testCase.inputForHome(h.home()) : testCase.input;
+    const result = await h.toolCall(testCase.toolName, input);
+
+    assertProtectedPathBlock(result, testCase.label);
+    assert.equal(h.selectCallCount(), 0, `${testCase.label} should not prompt before protected-path block`);
+  }
+}
+
+async function testSessionApprovalsDoNotBypassProtectedPaths() {
+  const h = await createHarness({ selectResponses: [1] });
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const approved = await h.toolCall("write", { path: "generated.txt" });
+  assert.equal(approved, undefined, "initial write approval should pass");
+  assert.equal(h.selectCallCount(), 1, "initial write should prompt once");
+
+  const result = await h.toolCall("write", { path: `${h.home()}/.ssh/config` });
+
+  assertProtectedPathBlock(result, "session-approved write");
+  assert.equal(h.selectCallCount(), 1, "protected write should be blocked before another prompt");
+}
+
+async function testSessionApprovalsStillWorkAfterSafetyPasses() {
+  const defaultTool = await createHarness({ selectResponses: [1] });
+  defaultTool.setFlag("permission-mode", "default");
+  await defaultTool.sessionStart();
+
+  assert.equal(await defaultTool.toolCall("write", { path: "generated.txt" }), undefined);
+  assert.equal(await defaultTool.toolCall("write", { path: "another-generated.txt" }), undefined);
+  assert.equal(defaultTool.selectCallCount(), 1, "default tool session approval should suppress second prompt");
+
+  const defaultCommand = await createHarness({ selectResponses: [1] });
+  defaultCommand.setFlag("permission-mode", "default");
+  await defaultCommand.sessionStart();
+
+  assert.equal(await defaultCommand.toolCall("bash", { command: "touch generated.txt" }), undefined);
+  assert.equal(await defaultCommand.toolCall("bash", { command: "touch generated.txt" }), undefined);
+  assert.equal(defaultCommand.selectCallCount(), 1, "default command session approval should suppress second prompt");
+
+  const strictTool = await createHarness({ selectResponses: [1] });
+  strictTool.setFlag("permission-mode", "strict");
+  await strictTool.sessionStart();
+
+  assert.equal(await strictTool.toolCall("read", { path: "README.md" }), undefined);
+  assert.equal(await strictTool.toolCall("read", { path: "package.json" }), undefined);
+  assert.equal(strictTool.selectCallCount(), 1, "strict tool session approval should suppress second prompt");
+
+  const strictCommand = await createHarness({ selectResponses: [1] });
+  strictCommand.setFlag("permission-mode", "strict");
+  await strictCommand.sessionStart();
+
+  assert.equal(await strictCommand.toolCall("bash", { command: "touch strict-generated.txt" }), undefined);
+  assert.equal(await strictCommand.toolCall("bash", { command: "touch strict-generated.txt" }), undefined);
+  assert.equal(strictCommand.selectCallCount(), 1, "strict command session approval should suppress second prompt");
+}
+
 async function testCyclingThroughPlanDoesNotInjectEndedContext() {
   const h = await createHarness();
   await h.sessionStart();
@@ -379,6 +544,10 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testDefaultAllowsOrdinaryDotPathReadsWithoutPrompt();
   await testDefaultAllowsWorkflowToolsWithoutPrompt();
   await testStrictPromptsForWorkflowTools();
+  await testCatastrophicBashRunsBeforeAllowBranches();
+  await testProtectedPathsRunBeforeAllowAndDenyBranches();
+  await testSessionApprovalsDoNotBypassProtectedPaths();
+  await testSessionApprovalsStillWorkAfterSafetyPasses();
   await testCyclingThroughPlanDoesNotInjectEndedContext();
   await testLeavingAfterPlanTurnInjectsEndedContext();
   console.log("plan-ended-context tests passed");

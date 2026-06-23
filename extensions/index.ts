@@ -339,11 +339,6 @@ export default async function permissionExtension(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     const toolName = event.toolName;
 
-    if (mode === "plan") return enforcePlanMode(toolName, event.input, planModeAllowedMcpServers);
-    const modeMeta = getModeMeta(mode, modes);
-    const customPolicy = modeMeta.policy;
-    if (!customPolicy && mode !== "default" && mode !== "strict" && !GATED_TOOLS.has(toolName)) return;
-
     const safetyBlock = await enforceAlwaysOnSafety({
       toolName,
       input: event.input,
@@ -354,6 +349,11 @@ export default async function permissionExtension(pi: ExtensionAPI) {
       allowCatastrophic,
     });
     if (safetyBlock) return safetyBlock;
+
+    if (mode === "plan") return enforcePlanMode(toolName, event.input, planModeAllowedMcpServers);
+    const modeMeta = getModeMeta(mode, modes);
+    const customPolicy = modeMeta.policy;
+    if (!customPolicy && mode !== "default" && mode !== "strict" && !GATED_TOOLS.has(toolName)) return;
 
     if (customPolicy) return enforceCustomMode(toolName, event.input, ctx, customPolicy);
     if (mode === "bypassPermissions") return;

@@ -192,12 +192,12 @@
 - Modify: `extensions/index.ts` if the current order lets any allowlist/session approval run before safety
 - Test: `tests/permission-modes.test.cjs` or existing harness test file
 
-- [ ] Ensure catastrophic bash commands are checked before plan-mode allow/deny, custom policy allow, bypass-mode allow, session approvals, and default read/workflow allowlists.
-- [ ] Ensure protected path checks still apply to bash/write/edit as before and cannot be bypassed by session approvals.
-- [ ] Add protected-path precedence tests against every allow path affected by this change: plan-mode allow/deny, custom policy allow, bypass/acceptEdits allow, session approvals, and default read/workflow allowlists.
-- [ ] Verify session-level approvals still work for prompted tools/commands in `default` and `strict` after safety passes.
-- [ ] Add regression tests for catastrophic command blocking, protected path blocking, and session allow behavior around the new `default`/`strict` branches.
-- [ ] Run focused tests: `npm run test` — must pass before next task.
+- [x] Ensure catastrophic bash commands are checked before plan-mode allow/deny, custom policy allow, bypass-mode allow, session approvals, and default read/workflow allowlists.
+- [x] Ensure protected path checks still apply to bash/write/edit as before and cannot be bypassed by session approvals.
+- [x] Add protected-path precedence tests against every allow path affected by this change: plan-mode allow/deny, custom policy allow, bypass/acceptEdits allow, session approvals, and default read/workflow allowlists.
+- [x] Verify session-level approvals still work for prompted tools/commands in `default` and `strict` after safety passes.
+- [x] Add regression tests for catastrophic command blocking, protected path blocking, and session allow behavior around the new `default`/`strict` branches.
+- [x] Run focused tests: `npm run test` — must pass before next task.
 
 ### Task 7: Update README and user-facing mode documentation
 
