@@ -28,6 +28,8 @@ async function createHarness() {
   const flags = new Map();
   let permissionStatus;
   let lastSelectOptions;
+  let lastSelectPrompt;
+  let selectCallCount = 0;
   let activeTools = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
   const pi = {
@@ -52,7 +54,9 @@ async function createHarness() {
       setStatus(name, value) {
         if (name === "permissions") permissionStatus = value;
       },
-      select(_prompt, options) {
+      select(prompt, options) {
+        selectCallCount += 1;
+        lastSelectPrompt = prompt;
         lastSelectOptions = options;
         return undefined;
       },
@@ -87,15 +91,23 @@ async function createHarness() {
     await commands.get("permissions").handler([], ctx);
   }
 
+  async function toolCall(toolName, input = {}) {
+    const [result] = await emit("tool_call", { toolName, input });
+    return result;
+  }
+
   return {
     beforeAgentStart,
     sessionStart,
     shiftTab,
     permissionsCommand,
+    toolCall,
     setFlag(name, value) { flags.set(name, value); },
     status() { return permissionStatus; },
     shortcutDescription() { return shortcuts.get("shift+tab").description; },
     lastSelectOptions() { return lastSelectOptions; },
+    lastSelectPrompt() { return lastSelectPrompt; },
+    selectCallCount() { return selectCallCount; },
   };
 }
 
@@ -142,6 +154,38 @@ async function testPermissionsCommandListsStrict() {
   );
 }
 
+async function testStrictPromptsForOrdinaryReadTools() {
+  for (const toolName of ["read", "ls", "grep"]) {
+    const h = await createHarness();
+    h.setFlag("permission-mode", "strict");
+    await h.sessionStart();
+
+    const result = await h.toolCall(toolName, toolName === "read" ? { path: "README.md" } : { path: "." });
+
+    assert.equal(h.selectCallCount(), 1, `strict should prompt for ${toolName}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, `User denied ${toolName}`);
+    assert.equal(h.lastSelectPrompt(), `🔒 ${toolName}`);
+  }
+}
+
+async function testDefaultAllowsOrdinaryReadToolsWithoutPrompt() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  for (const [toolName, input] of [
+    ["read", { path: "README.md" }],
+    ["ls", { path: "." }],
+    ["grep", { pattern: "strict", path: "README.md" }],
+  ]) {
+    const result = await h.toolCall(toolName, input);
+    assert.equal(result, undefined, `default should allow ${toolName}`);
+  }
+
+  assert.equal(h.selectCallCount(), 0, "default read allowlist should not invoke confirmation UI");
+}
+
 async function testCyclingThroughPlanDoesNotInjectEndedContext() {
   const h = await createHarness();
   await h.sessionStart();
@@ -173,6 +217,8 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testStrictModeCanBeSelectedByFlag();
   await testShiftTabCycleIncludesStrictWithoutReorderingExistingModes();
   await testPermissionsCommandListsStrict();
+  await testStrictPromptsForOrdinaryReadTools();
+  await testDefaultAllowsOrdinaryReadToolsWithoutPrompt();
   await testCyclingThroughPlanDoesNotInjectEndedContext();
   await testLeavingAfterPlanTurnInjectsEndedContext();
   console.log("plan-ended-context tests passed");

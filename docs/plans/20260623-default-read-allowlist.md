@@ -140,11 +140,11 @@
 - Modify: `extensions/index.ts`
 - Test: `tests/permission-modes.test.cjs` or existing harness test file
 
-- [ ] Adjust `pi.on("tool_call", ...)` so `strict` follows the old current-`default` path: after always-on safety and session-allow checks, call `promptApproval()` for ordinary tools.
-- [ ] Keep existing behavior for `plan`, custom modes, `acceptEdits`, and `bypassPermissions` unchanged.
-- [ ] Add helper(s) for default-mode pre-approval decisions without mixing them into custom mode policy.
-- [ ] Add tests that `strict` prompts for ordinary `read`/`ls`/`grep` while `default` no longer does for non-sensitive reads.
-- [ ] Run focused tests: `npm run test` — must pass before next task.
+- [x] Adjust `pi.on("tool_call", ...)` so `strict` follows the old current-`default` path: after always-on safety and session-allow checks, call `promptApproval()` for ordinary tools.
+- [x] Keep existing behavior for `plan`, custom modes, `acceptEdits`, and `bypassPermissions` unchanged.
+- [x] Add helper(s) for default-mode pre-approval decisions without mixing them into custom mode policy.
+- [x] Add tests that `strict` prompts for ordinary `read`/`ls`/`grep` while `default` no longer does for non-sensitive reads.
+- [x] Run focused tests: `npm run test` — must pass before next task.
 
 ### Task 3: Allow ordinary read/search/list operations in `default`
 

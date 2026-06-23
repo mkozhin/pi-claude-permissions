@@ -93,6 +93,7 @@ const BUILT_IN_MODES: ModeDefinition[] = [
 
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "rg", "fd", "bat", "eza", "mcp"];
 const GATED_TOOLS = new Set(["write", "edit", "bash"]);
+const DEFAULT_READ_TOOLS = new Set(["read", "grep", "find", "ls", "rg", "fd", "bat", "eza"]);
 
 const SAFE_PLAN_BASH_PREFIXES = [
   "cat", "head", "tail", "less", "more", "grep", "find", "ls",
@@ -331,7 +332,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     if (mode === "plan") return enforcePlanMode(toolName, event.input, planModeAllowedMcpServers);
     const modeMeta = getModeMeta(mode, modes);
     const customPolicy = modeMeta.policy;
-    if (!customPolicy && mode !== "default" && !GATED_TOOLS.has(toolName)) return;
+    if (!customPolicy && mode !== "default" && mode !== "strict" && !GATED_TOOLS.has(toolName)) return;
 
     const safetyBlock = await enforceAlwaysOnSafety({
       toolName,
@@ -349,6 +350,8 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     if (mode === "acceptEdits" && (toolName === "write" || toolName === "edit")) return;
 
     if (isSessionAllowed(toolName, event.input, sessionAllow)) return;
+
+    if (mode === "default" && isDefaultPreApprovedToolCall(toolName, event.input, ctx, home)) return;
 
     if (!ctx.hasUI) {
       return { block: true as const, reason: `Blocked ${toolName} (no UI for confirmation, mode: ${mode})` };
@@ -771,6 +774,24 @@ async function enforceAlwaysOnSafety(args: {
 function isSessionAllowed(toolName: string, input: Record<string, unknown>, sessionAllow: SessionAllow): boolean {
   if (toolName === "bash" && sessionAllow.commands.has(String(input.command ?? ""))) return true;
   return sessionAllow.tools.has(toolName);
+}
+
+function isDefaultPreApprovedToolCall(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
+  return isDefaultAllowedReadTool(toolName, input, ctx, home);
+}
+
+function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
+  if (!DEFAULT_READ_TOOLS.has(toolName)) return false;
+  return findSensitiveReadReason(toolName, input, ctx, home) === undefined;
+}
+
+function findSensitiveReadReason(
+  _toolName: string,
+  _input: Record<string, unknown>,
+  _ctx: UiContext,
+  _home: string,
+): string | undefined {
+  return undefined;
 }
 
 
