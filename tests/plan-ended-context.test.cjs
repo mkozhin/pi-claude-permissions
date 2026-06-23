@@ -244,6 +244,72 @@ async function testDefaultPromptsForWritesEditsAndMutatingBash() {
   }
 }
 
+async function testDefaultPromptsForSensitiveDirectReads() {
+  for (const path of [
+    ".env",
+    ".env.local",
+    "~/.ssh/config",
+    ".aws/credentials",
+    ".npmrc",
+    ".netrc",
+    ".kube/config",
+    "config/token.txt",
+    "credentials.json",
+    "private-key.pem",
+    "auth.json",
+  ]) {
+    const h = await createHarness();
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall("read", { path });
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt for sensitive read path: ${path}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, "User denied read");
+    assert.equal(h.lastSelectPrompt(), "🔒 read");
+  }
+}
+
+async function testDefaultPromptsForSensitiveBashReads() {
+  for (const command of [
+    "cat .env",
+    "cat .env.local",
+    "grep token .ssh/config",
+    "cat .aws/credentials",
+    "cat credentials.json",
+    "git diff .env",
+  ]) {
+    const h = await createHarness();
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall("bash", { command });
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt for sensitive bash read: ${command}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, "User denied bash");
+    assert.equal(h.lastSelectPrompt(), `🔒 bash: ${command}`);
+  }
+}
+
+async function testDefaultAllowsOrdinaryDotPathReadsWithoutPrompt() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  for (const path of [
+    ".gitignore",
+    ".github/workflows/publish.yml",
+    ".editorconfig",
+  ]) {
+    const result = await h.toolCall("read", { path });
+    assert.equal(result, undefined, `default should allow ordinary dot path: ${path}`);
+  }
+
+  assert.equal(h.selectCallCount(), 0, "ordinary dot paths should not invoke confirmation UI");
+}
+
 async function testCyclingThroughPlanDoesNotInjectEndedContext() {
   const h = await createHarness();
   await h.sessionStart();
@@ -280,6 +346,9 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testDefaultAllowsSafeReadOnlyBashWithoutPrompt();
   await testDefaultPromptsForUnsafeBashSyntax();
   await testDefaultPromptsForWritesEditsAndMutatingBash();
+  await testDefaultPromptsForSensitiveDirectReads();
+  await testDefaultPromptsForSensitiveBashReads();
+  await testDefaultAllowsOrdinaryDotPathReadsWithoutPrompt();
   await testCyclingThroughPlanDoesNotInjectEndedContext();
   await testLeavingAfterPlanTurnInjectsEndedContext();
   console.log("plan-ended-context tests passed");

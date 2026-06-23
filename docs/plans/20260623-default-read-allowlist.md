@@ -166,12 +166,12 @@
 - Modify: `extensions/index.ts`
 - Test: `tests/permission-modes.test.cjs` or existing harness test file
 
-- [ ] Implement secret-like path/name matching for `.env*`, `.ssh`, `.aws`, `.gnupg`, `.gpg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, credential/token/secret/private-key/auth names.
-- [ ] Resolve direct tool path inputs relative to `ctx.cwd ?? process.cwd()` and `homedir()` where possible.
-- [ ] Inspect bash command text for sensitive path segments before auto-allowing read-only bash.
-- [ ] Add tests that `default` prompts for direct reads of `.env`, `.env.local`, `~/.ssh/config`, `.aws/credentials`, `.npmrc`, `.netrc`, `.kube/config`, and token/credential-named files.
-- [ ] Add tests that `default` does not prompt for ordinary non-secret dot paths like `.gitignore`, `.github/workflows/publish.yml`, and `.editorconfig`.
-- [ ] Run focused tests: `npm run test` — must pass before next task.
+- [x] Implement secret-like path/name matching for `.env*`, `.ssh`, `.aws`, `.gnupg`, `.gpg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, credential/token/secret/private-key/auth names.
+- [x] Resolve direct tool path inputs relative to `ctx.cwd ?? process.cwd()` and `homedir()` where possible.
+- [x] Inspect bash command text for sensitive path segments before auto-allowing read-only bash.
+- [x] Add tests that `default` prompts for direct reads of `.env`, `.env.local`, `~/.ssh/config`, `.aws/credentials`, `.npmrc`, `.netrc`, `.kube/config`, and token/credential-named files.
+- [x] Add tests that `default` does not prompt for ordinary non-secret dot paths like `.gitignore`, `.github/workflows/publish.yml`, and `.editorconfig`.
+- [x] Run focused tests: `npm run test` — must pass before next task.
 
 ### Task 5: Always allow workflow extension tools in `default`
 

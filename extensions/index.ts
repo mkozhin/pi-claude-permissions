@@ -94,6 +94,11 @@ const BUILT_IN_MODES: ModeDefinition[] = [
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "rg", "fd", "bat", "eza", "mcp"];
 const GATED_TOOLS = new Set(["write", "edit", "bash"]);
 const DEFAULT_READ_TOOLS = new Set(["read", "grep", "find", "ls", "rg", "fd", "bat", "eza"]);
+const DIRECT_READ_PATH_INPUT_KEYS = new Set(["path", "paths", "file", "files", "glob"]);
+const SENSITIVE_CREDENTIAL_PATH_SEGMENTS = new Set([".ssh", ".aws", ".gnupg", ".gpg", ".kube", ".docker"]);
+const SENSITIVE_CREDENTIAL_FILES = new Set([".npmrc", ".netrc"]);
+const SENSITIVE_FILE_STEMS = new Set(["credential", "credentials", "token", "tokens", "secret", "secrets", "auth", "id_rsa", "id_ed25519"]);
+const SEARCH_PATTERN_COMMANDS = new Set(["grep", "rg", "sed", "awk", "jq"]);
 const DEFAULT_SAFE_BASH_READ_PATTERNS = [
   /^(?:cat|head|tail|less|more|grep|rg|find|ls|pwd|wc|sort|uniq|diff|file|stat|du|df|tree|which|whereis|type|echo|printf|jq|sed|awk|fd|bat|eza)(?:\s|$)/,
   /^git\s+(?:status|log|diff|show|branch|remote|ls-files|ls-tree|config\s+--get)(?:\s|$)/,
@@ -794,14 +799,157 @@ function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknow
 }
 
 function findSensitiveReadReason(
-  _toolName: string,
-  _input: Record<string, unknown>,
-  _ctx: UiContext,
-  _home: string,
+  toolName: string,
+  input: Record<string, unknown>,
+  ctx: UiContext,
+  home: string,
 ): string | undefined {
-  return undefined;
+  const sensitivePath = toolName === "bash"
+    ? findSensitiveBashReadPath(String(input.command ?? ""), ctx, home)
+    : findSensitiveDirectReadPath(input, ctx, home);
+
+  return sensitivePath ? `sensitive read path: ${sensitivePath}` : undefined;
 }
 
+function findSensitiveDirectReadPath(input: Record<string, unknown>, ctx: UiContext, home: string): string | undefined {
+  for (const path of getDirectReadPathInputs(input)) {
+    if (isSensitiveReadPath(path, ctx, home)) return path;
+  }
+}
+
+function getDirectReadPathInputs(input: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  for (const key of DIRECT_READ_PATH_INPUT_KEYS) collectStringValues(input[key], paths);
+  return paths;
+}
+
+function collectStringValues(value: unknown, output: string[]): void {
+  if (typeof value === "string" && value.trim().length > 0) {
+    output.push(value.trim());
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectStringValues(item, output);
+  }
+}
+
+function findSensitiveBashReadPath(command: string, ctx: UiContext, home: string): string | undefined {
+  for (const segment of command.split("|")) {
+    for (const candidate of getBashPathCandidates(segment)) {
+      if (isSensitiveReadPath(candidate, ctx, home)) return candidate;
+    }
+  }
+}
+
+function getBashPathCandidates(segment: string): string[] {
+  const tokens = tokenizeShellLike(segment).map(cleanShellToken).filter((token): token is string => token !== undefined);
+  const commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
+  if (commandIndex < 0) return [];
+
+  const commandName = getCommandName(tokens[commandIndex]!);
+  const args = tokens.slice(commandIndex + 1);
+
+  if (commandName === "git") return getGenericPathCandidates(args.slice(1));
+  if (commandName === "find") return getFindPathCandidates(args);
+  if (commandName === "fd") return getPatternThenPathCandidates(args);
+  if (SEARCH_PATTERN_COMMANDS.has(commandName)) return getPatternThenPathCandidates(args);
+
+  return getGenericPathCandidates(args);
+}
+
+function tokenizeShellLike(value: string): string[] {
+  return Array.from(value.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|([^\s]+)/g), (match) =>
+    match[1] ?? match[2] ?? match[3] ?? "",
+  );
+}
+
+function cleanShellToken(token: string): string | undefined {
+  const cleaned = token.trim().replace(/^[({[]+|[)},\]]+$/g, "");
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function isShellAssignment(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+}
+
+function getCommandName(token: string): string {
+  const normalized = token.replace(/\\/g, "/");
+  return normalized.slice(normalized.lastIndexOf("/") + 1).toLowerCase();
+}
+
+function getPatternThenPathCandidates(args: string[]): string[] {
+  const paths: string[] = [];
+  let sawPattern = false;
+
+  for (const arg of args) {
+    if (arg === "--") continue;
+    if (arg.startsWith("-")) continue;
+    if (!sawPattern) {
+      sawPattern = true;
+      continue;
+    }
+    paths.push(arg);
+  }
+
+  return paths;
+}
+
+function getFindPathCandidates(args: string[]): string[] {
+  const paths: string[] = [];
+  for (const arg of args) {
+    if (arg === "--") continue;
+    if (arg.startsWith("-") || arg === "(" || arg === "!" || arg === ")") break;
+    paths.push(arg);
+  }
+  return paths;
+}
+
+function getGenericPathCandidates(args: string[]): string[] {
+  return args.filter((arg) => arg !== "--" && !arg.startsWith("-"));
+}
+
+function isSensitiveReadPath(rawPath: string, ctx: UiContext, home: string): boolean {
+  const candidates = [rawPath, resolveReadPath(rawPath, ctx, home)];
+  return candidates.some((candidate) => splitPathSegments(candidate).some(isSensitivePathSegment));
+}
+
+function resolveReadPath(rawPath: string, ctx: UiContext, home: string): string {
+  if (rawPath === "~") return home;
+  if (rawPath.startsWith("~/")) return resolve(home, rawPath.slice(2));
+  if (rawPath.startsWith("/")) return resolve(rawPath);
+  return resolve(ctx.cwd ?? process.cwd(), rawPath);
+}
+
+function splitPathSegments(path: string): string[] {
+  return path
+    .replace(/\\/g, "/")
+    .replace(/:/g, "/")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+}
+
+function isSensitivePathSegment(segment: string): boolean {
+  const lower = segment.toLowerCase();
+  if (lower.startsWith(".env")) return true;
+  if (SENSITIVE_CREDENTIAL_PATH_SEGMENTS.has(lower)) return true;
+  if (SENSITIVE_CREDENTIAL_FILES.has(lower)) return true;
+
+  const stem = getFilenameStem(lower);
+  if (SENSITIVE_FILE_STEMS.has(stem)) return true;
+  if (/^private[-_.]?key$/.test(stem)) return true;
+  if (/(?:^|[-_.])(?:credential|credentials|token|tokens|secret|secrets|auth)(?:$|[-_.])/.test(stem)) return true;
+  if (/(?:^|[-_.])private[-_.]?key(?:$|[-_.])/.test(stem)) return true;
+  return false;
+}
+
+function getFilenameStem(segment: string): string {
+  const withoutGlob = segment.replace(/[*?[\]{}]/g, "");
+  const stemSource = withoutGlob.startsWith(".") ? withoutGlob.slice(1) : withoutGlob;
+  const dotIndex = stemSource.indexOf(".");
+  return dotIndex >= 0 ? stemSource.slice(0, dotIndex) : stemSource;
+}
 
 function isSafeDefaultReadCommand(command: string): boolean {
   const stripped = stripAllowedStderrNullRedirects(command.trim());
