@@ -105,6 +105,16 @@ const PATH_BEARING_BASH_OPTIONS = new Set([
   "--exclude", "--exclude-dir", "--file", "--from-file", "--glob", "--iglob", "--include",
 ]);
 const SHORT_PATH_BEARING_BASH_OPTIONS = new Set(["-f", "-g"]);
+const PATTERN_BEARING_BASH_OPTIONS = new Set(["-e", "--regexp", "--pattern", "--fixed-strings"]);
+const SHORT_PATTERN_BEARING_BASH_OPTIONS = new Set(["-e"]);
+const FIND_PREFIX_OPTIONS_WITH_VALUE = new Set(["-D"]);
+const FIND_PREFIX_OPTIONS = new Set(["-H", "-L", "-P"]);
+const FIND_PATH_PREDICATES = new Set([
+  "-name", "-iname", "-lname", "-ilname", "-path", "-ipath",
+  "-wholename", "-iwholename", "-regex", "-iregex",
+]);
+const GIT_PATH_BEARING_OPTIONS = new Set(["-C", "--git-dir", "--work-tree"]);
+const GIT_VALUE_OPTIONS = new Set(["-c", "--config-env"]);
 const DEFAULT_SAFE_BASH_COMMANDS = new Set([
   "cat", "head", "tail", "less", "more", "grep", "rg", "find", "ls",
   "pwd", "wc", "sort", "uniq", "diff", "file", "stat", "du", "df",
@@ -882,17 +892,24 @@ function findSensitiveBashReadPath(command: string, ctx: UiContext, home: string
 function getBashPathCandidates(segment: string): string[] {
   const tokens = tokenizeShellLike(segment).map(cleanShellToken).filter((token): token is string => token !== undefined);
   const commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
-  if (commandIndex < 0) return [];
+  const rawPathCandidates = uniqueStrings([
+    ...getShellPathReferenceCandidates(tokens),
+    ...getShellAssignmentPathCandidates(commandIndex < 0 ? tokens : tokens.slice(0, commandIndex)),
+  ]);
+  if (commandIndex < 0) return rawPathCandidates;
 
   const commandName = getCommandName(tokens[commandIndex]!);
   const args = tokens.slice(commandIndex + 1);
+  let parsedPathCandidates: string[];
 
-  if (commandName === "git") return getGenericPathCandidates(args.slice(1));
-  if (commandName === "find") return getFindPathCandidates(args);
-  if (commandName === "fd") return getPatternThenPathCandidates(args);
-  if (SEARCH_PATTERN_COMMANDS.has(commandName)) return getPatternThenPathCandidates(args);
+  if (commandName === "git") parsedPathCandidates = getGitPathCandidates(args);
+  else if (commandName === "find") parsedPathCandidates = getFindPathCandidates(args);
+  else if (commandName === "fd") parsedPathCandidates = getPatternThenPathCandidates(args);
+  else if (commandName === "rg" && hasOption(args, "--files")) parsedPathCandidates = getAllPositionalPathCandidates(args);
+  else if (SEARCH_PATTERN_COMMANDS.has(commandName)) parsedPathCandidates = getPatternThenPathCandidates(args);
+  else parsedPathCandidates = getGenericPathCandidates(args);
 
-  return getGenericPathCandidates(args);
+  return uniqueStrings([...rawPathCandidates, ...parsedPathCandidates]);
 }
 
 function normalizeShellPathText(value: string, home: string): string {
@@ -916,6 +933,34 @@ function cleanShellToken(token: string): string | undefined {
   return cleaned.length > 0 ? cleaned : undefined;
 }
 
+function getShellPathReferenceCandidates(tokens: string[]): string[] {
+  const paths: string[] = [];
+  const pathReference = /(?:~(?:\/[^\s"'`;&|<>,)]*)?|\/[^\s"'`;&|<>,)]*|\.\.?\/[^\s"'`;&|<>,)]*)/g;
+  for (const token of tokens) {
+    for (const match of token.matchAll(pathReference)) {
+      if (match[0] !== "." && match[0] !== "..") paths.push(match[0]);
+    }
+  }
+  return uniqueStrings(paths);
+}
+
+function getShellAssignmentPathCandidates(tokens: string[]): string[] {
+  const paths: string[] = [];
+  for (const token of tokens) {
+    const eqIndex = token.indexOf("=");
+    if (eqIndex <= 0) continue;
+    const name = token.slice(0, eqIndex);
+    const value = token.slice(eqIndex + 1);
+    if (!value || !isPathLikeAssignmentName(name)) continue;
+    paths.push(...value.split(":").filter((part) => part.length > 0));
+  }
+  return uniqueStrings(paths);
+}
+
+function isPathLikeAssignmentName(name: string): boolean {
+  return /(?:^|_)(?:PATH|DIR|FILE|HOME|ROOT|CONFIG|KEY)$/i.test(name);
+}
+
 function isShellAssignment(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
 }
@@ -932,8 +977,16 @@ function getPatternThenPathCandidates(args: string[]): string[] {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]!;
     if (arg === "--") continue;
-    if (collectPathBearingOptionValue(args, i, paths)) {
-      i += 1;
+    const pathOption = collectPathBearingOptionValue(args, i, paths);
+    if (pathOption) {
+      if (isPatternSourceOption(pathOption.option)) sawPattern = true;
+      if (pathOption.consumeNext) i += 1;
+      continue;
+    }
+    const patternOption = getPatternBearingOptionValue(args, i);
+    if (patternOption) {
+      sawPattern = true;
+      if (patternOption.consumeNext) i += 1;
       continue;
     }
     if (arg.startsWith("-")) continue;
@@ -947,44 +1000,179 @@ function getPatternThenPathCandidates(args: string[]): string[] {
   return paths;
 }
 
-function collectPathBearingOptionValue(args: string[], index: number, paths: string[]): boolean {
-  const arg = args[index]!;
-  if (!arg.startsWith("-") || arg === "--") return false;
-
-  const eqIndex = arg.indexOf("=");
-  if (eqIndex > 0) {
-    const option = arg.slice(0, eqIndex);
-    if (PATH_BEARING_BASH_OPTIONS.has(option)) paths.push(arg.slice(eqIndex + 1));
-    return false;
-  }
-
-  const shortOption = arg.slice(0, 2);
-  if (arg.length > 2 && SHORT_PATH_BEARING_BASH_OPTIONS.has(shortOption)) {
-    paths.push(arg.slice(2));
-    return false;
-  }
-
-  if (!PATH_BEARING_BASH_OPTIONS.has(arg)) return false;
-  const next = args[index + 1];
-  if (next && next !== "--") {
-    paths.push(next);
-    return true;
-  }
-  return false;
-}
-
-function getFindPathCandidates(args: string[]): string[] {
+function getAllPositionalPathCandidates(args: string[]): string[] {
   const paths: string[] = [];
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
     if (arg === "--") continue;
-    if (arg.startsWith("-") || arg === "(" || arg === "!" || arg === ")") break;
+    const pathOption = collectPathBearingOptionValue(args, i, paths);
+    if (pathOption) {
+      if (pathOption.consumeNext) i += 1;
+      continue;
+    }
+    const patternOption = getPatternBearingOptionValue(args, i);
+    if (patternOption) {
+      if (patternOption.consumeNext) i += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
     paths.push(arg);
   }
   return paths;
 }
 
+function collectPathBearingOptionValue(args: string[], index: number, paths: string[]): { option: string; consumeNext: boolean } | undefined {
+  const arg = args[index]!;
+  if (!arg.startsWith("-") || arg === "--") return;
+
+  const eqIndex = arg.indexOf("=");
+  if (eqIndex > 0) {
+    const option = arg.slice(0, eqIndex);
+    if (PATH_BEARING_BASH_OPTIONS.has(option)) paths.push(arg.slice(eqIndex + 1));
+    return PATH_BEARING_BASH_OPTIONS.has(option) ? { option, consumeNext: false } : undefined;
+  }
+
+  const shortOption = arg.slice(0, 2);
+  if (arg.length > 2 && SHORT_PATH_BEARING_BASH_OPTIONS.has(shortOption)) {
+    paths.push(arg.slice(2));
+    return { option: shortOption, consumeNext: false };
+  }
+
+  if (!PATH_BEARING_BASH_OPTIONS.has(arg)) return;
+  const next = args[index + 1];
+  if (next && next !== "--") {
+    paths.push(next);
+    return { option: arg, consumeNext: true };
+  }
+  return { option: arg, consumeNext: false };
+}
+
+function getPatternBearingOptionValue(args: string[], index: number): { option: string; consumeNext: boolean } | undefined {
+  const arg = args[index]!;
+  if (!arg.startsWith("-") || arg === "--") return;
+
+  const eqIndex = arg.indexOf("=");
+  if (eqIndex > 0) {
+    const option = arg.slice(0, eqIndex);
+    return PATTERN_BEARING_BASH_OPTIONS.has(option) ? { option, consumeNext: false } : undefined;
+  }
+
+  const shortOption = arg.slice(0, 2);
+  if (arg.length > 2 && SHORT_PATTERN_BEARING_BASH_OPTIONS.has(shortOption)) {
+    return { option: shortOption, consumeNext: false };
+  }
+
+  if (!PATTERN_BEARING_BASH_OPTIONS.has(arg)) return;
+  const next = args[index + 1];
+  return { option: arg, consumeNext: next !== undefined && next !== "--" };
+}
+
+function isPatternSourceOption(option: string): boolean {
+  return option === "-f" || option === "--file" || option === "--from-file";
+}
+
+function getFindPathCandidates(args: string[]): string[] {
+  const paths: string[] = [];
+  let beforeExpression = true;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--") continue;
+    if (arg === "(" || arg === "!" || arg === ")") {
+      beforeExpression = false;
+      continue;
+    }
+    if (beforeExpression && FIND_PREFIX_OPTIONS.has(arg)) continue;
+    if (beforeExpression && FIND_PREFIX_OPTIONS_WITH_VALUE.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (FIND_PATH_PREDICATES.has(arg)) {
+      const next = args[indexAfterPredicate(args, i)];
+      if (next && next !== "--") paths.push(next);
+      beforeExpression = false;
+      i = indexAfterPredicate(args, i);
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      beforeExpression = false;
+      continue;
+    }
+    if (beforeExpression) paths.push(arg);
+  }
+  return paths;
+}
+
+function getGitPathCandidates(args: string[]): string[] {
+  const paths: string[] = [];
+  let subcommandIndex = -1;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--") {
+      subcommandIndex = i + 1;
+      break;
+    }
+    const pathOption = collectGitPathOptionValue(args, i, paths);
+    if (pathOption) {
+      if (pathOption.consumeNext) i += 1;
+      continue;
+    }
+    if (consumesGitOptionValue(args, i)) {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    subcommandIndex = i;
+    break;
+  }
+
+  if (subcommandIndex < 0 || subcommandIndex >= args.length) return paths;
+  return uniqueStrings([...paths, ...getGenericPathCandidates(args.slice(subcommandIndex + 1))]);
+}
+
+function collectGitPathOptionValue(args: string[], index: number, paths: string[]): { consumeNext: boolean } | undefined {
+  const arg = args[index]!;
+  const eqIndex = arg.indexOf("=");
+  if (eqIndex > 0) {
+    const option = arg.slice(0, eqIndex);
+    if (GIT_PATH_BEARING_OPTIONS.has(option)) {
+      paths.push(arg.slice(eqIndex + 1));
+      return { consumeNext: false };
+    }
+  }
+
+  if (arg.length > 2 && arg.startsWith("-C")) {
+    paths.push(arg.slice(2));
+    return { consumeNext: false };
+  }
+
+  if (!GIT_PATH_BEARING_OPTIONS.has(arg)) return;
+  const next = args[index + 1];
+  if (next && next !== "--") {
+    paths.push(next);
+    return { consumeNext: true };
+  }
+  return { consumeNext: false };
+}
+
+function consumesGitOptionValue(args: string[], index: number): boolean {
+  const arg = args[index]!;
+  if (arg === "-c" || arg === "--config-env") return args[index + 1] !== undefined && args[index + 1] !== "--";
+  if (arg.startsWith("-c") && arg.length > 2) return false;
+  return GIT_VALUE_OPTIONS.has(arg);
+}
+
 function getGenericPathCandidates(args: string[]): string[] {
   return args.filter((arg) => arg !== "--" && !arg.startsWith("-"));
+}
+
+function indexAfterPredicate(args: string[], index: number): number {
+  return args[index + 1] === "--" ? index + 2 : index + 1;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
 }
 
 function isSensitiveReadPath(rawPath: string, ctx: UiContext, home: string): boolean {
@@ -1076,6 +1264,7 @@ function isSafeDefaultReadCommandSegment(segment: string): boolean {
   const tokens = tokenizeShellLike(segment);
   const commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
   if (commandIndex < 0) return false;
+  if (commandIndex > 0) return false;
 
   const commandName = getCommandName(tokens[commandIndex]!);
   const args = tokens.slice(commandIndex + 1);
