@@ -176,6 +176,31 @@ async function testStrictModeCanBeSelectedByFlag() {
   assert.equal(h.status(), "⏵! Strict");
 }
 
+async function testStrictModeCanBeSelectedByConfig() {
+  for (const settingsKey of ["localSettings", "globalSettings"]) {
+    const h = await createHarness({
+      [settingsKey]: { piClaudePermissions: { defaultMode: "strict" } },
+    });
+
+    await h.sessionStart();
+
+    assert.equal(h.status(), "⏵! Strict", `${settingsKey} defaultMode should select strict`);
+  }
+}
+
+async function testConfiguredShiftTabCycleCanIncludeStrict() {
+  const h = await createHarness({
+    localSettings: { piClaudePermissions: { shiftTabOptions: ["strict", "default"] } },
+  });
+  await h.sessionStart();
+
+  await h.shiftTab();
+  assert.equal(h.status(), "⏵! Strict");
+
+  await h.shiftTab();
+  assert.equal(h.status(), "⏵ Default");
+}
+
 async function testShiftTabCycleIncludesStrictWithoutReorderingExistingModes() {
   const h = await createHarness();
   await h.sessionStart();
@@ -199,7 +224,7 @@ async function testShiftTabCycleIncludesStrictWithoutReorderingExistingModes() {
 }
 
 async function testPermissionsCommandListsStrict() {
-  const h = await createHarness();
+  const h = await createHarness({ selectResponses: [4] });
 
   await h.permissionsCommand();
 
@@ -208,20 +233,38 @@ async function testPermissionsCommandListsStrict() {
       option.includes("Strict") && option.includes("Ask before almost every tool call"),
     ),
   );
+  assert.equal(h.status(), "⏵! Strict");
+
+  const result = await h.toolCall("read", { path: "README.md" });
+  assert.equal(h.selectCallCount(), 2, "strict selected from /permissions should prompt for reads");
+  assert.equal(result?.block, true);
+  assert.equal(result?.reason, "User denied read");
 }
 
 async function testStrictPromptsForOrdinaryReadTools() {
-  for (const toolName of ["read", "ls", "grep"]) {
+  for (const [toolName, input, prompt] of [
+    ["read", { path: "README.md" }, "🔒 read"],
+    ["ls", { path: "." }, "🔒 ls"],
+    ["grep", { pattern: "strict", path: "README.md" }, "🔒 grep"],
+    ["find", { path: ".", pattern: "*.ts" }, "🔒 find"],
+    ["rg", { pattern: "strict", path: "." }, "🔒 rg"],
+    ["fd", { pattern: "README" }, "🔒 fd"],
+    ["bat", { path: "README.md" }, "🔒 bat"],
+    ["eza", { path: "." }, "🔒 eza"],
+    ["bash", { command: "cat README.md" }, "🔒 bash: cat README.md"],
+    ["bash", { command: "git status" }, "🔒 bash: git status"],
+    ["bash", { command: "git diff" }, "🔒 bash: git diff"],
+  ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "strict");
     await h.sessionStart();
 
-    const result = await h.toolCall(toolName, toolName === "read" ? { path: "README.md" } : { path: "." });
+    const result = await h.toolCall(toolName, input);
 
     assert.equal(h.selectCallCount(), 1, `strict should prompt for ${toolName}`);
     assert.equal(result?.block, true);
     assert.equal(result?.reason, `User denied ${toolName}`);
-    assert.equal(h.lastSelectPrompt(), `🔒 ${toolName}`);
+    assert.equal(h.lastSelectPrompt(), prompt);
   }
 }
 
@@ -260,6 +303,8 @@ async function testDefaultAllowsSafeReadOnlyBashWithoutPrompt() {
     "cat README.md",
     "git status",
     "git diff",
+    "git log",
+    "git show HEAD",
   ]) {
     const result = await h.toolCall("bash", { command });
     assert.equal(result, undefined, `default should allow safe read-only bash: ${command}`);
@@ -277,10 +322,23 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     "find . -fprint out.txt",
     "sort -o out.txt README.md",
     "git diff --output=out.patch",
+    "git log --output=out.patch",
+    "git show --output=out.patch HEAD",
+    "git checkout main",
     "sed -n 'w out.txt' README.md",
+    "cat `touch generated.txt`",
     "cat $(touch generated.txt)",
+    "cat README.md || touch generated.txt",
+    "cat README.md\n touch generated.txt",
+    "cat <(touch generated.txt)",
+    "cat $PROJECT_SECRET",
     "cat README.md; touch generated.txt",
     "cat README.md && touch generated.txt",
+    "npm install left-pad",
+    "python -c 'print(1)'",
+    "fd -x rm",
+    "rg --pre ./script token .",
+    "diff --output=out.patch README.md package.json",
   ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "default");
@@ -322,18 +380,31 @@ async function testDefaultPromptsForSensitiveDirectReads() {
     ["read", { path: ".npmrc" }],
     ["read", { path: ".netrc" }],
     ["read", { path: ".kube/config" }],
+    ["read", { path: ".gnupg/private-keys-v1.d/key" }],
+    ["read", { path: ".gpg/keyring" }],
+    ["read", { path: ".docker/config.json" }],
+    ["read", { path: "*.env" }],
     ["read", { path: "config/token.txt" }],
     ["read", { path: "credentials.json" }],
+    ["read", { path: "prod.secret.json" }],
+    ["read", { path: "service.auth.json" }],
+    ["read", { path: "aws.credentials.json" }],
     ["read", { path: "private-key.pem" }],
+    ["read", { path: "id_rsa" }],
+    ["read", { path: "id_ed25519.pub" }],
     ["read", { path: "auth.json" }],
     ["grep", { pattern: "needle", path: ".env" }],
     ["find", { path: ".aws" }],
     ["find", { path: ".", pattern: ".env" }],
+    ["find", { path: ".", name: "prod.secret.json" }],
     ["ls", { paths: ["README.md", "~/.ssh/config"] }],
+    ["ls", { name: "credentials.json" }],
     ["rg", { pattern: "needle", files: ["README.md", "credentials.json"] }],
     ["fd", { pattern: "credentials" }],
+    ["fd", { name: "id_rsa" }],
     ["bat", { file: ".npmrc" }],
     ["eza", { glob: "private-key.pem" }],
+    ["eza", { name: "service.auth.json" }],
   ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "default");
@@ -368,14 +439,20 @@ async function testDefaultPromptsForSensitiveBashReads() {
     "cat .env.local",
     "cat .e\"nv\"",
     "cat $'.env'",
+    "cat *.env",
     "grep token .ssh/config",
+    "grep -R --include=.env token .",
+    "rg -g .env token .",
     "find .aws -type f",
     "fd config .kube",
     "sed -n p .env",
     "awk pattern credentials.json",
     "jq . auth.json",
+    "jq -f service.auth.json data.json",
     "cat .aws/credentials",
     "cat credentials.json",
+    "cat prod.secret.json",
+    "cat service.auth.json",
     "git diff .env",
   ]) {
     const h = await createHarness();
@@ -486,13 +563,21 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "custom policy bash allow path", mode: "customAllow", toolName: "bash", input: { command: "cat ~/.ssh/config" }, localConfig: customModeConfig },
     { label: "custom policy write allow path", mode: "customAllow", toolName: "write", inputForHome: (home) => ({ path: `${home}/.ssh/config` }), localConfig: customModeConfig },
     { label: "bypass write allow path", mode: "bypassPermissions", toolName: "write", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
+    { label: "bypass write tilde protected path", mode: "bypassPermissions", toolName: "write", input: { path: "~/.ssh/config" } },
+    { label: "bypass write relative protected cwd", mode: "bypassPermissions", toolName: "write", input: { path: "config" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "acceptEdits edit allow path", mode: "acceptEdits", toolName: "edit", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
+    { label: "acceptEdits edit relative protected cwd", mode: "acceptEdits", toolName: "edit", input: { path: "config" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "default bash read allowlist path", mode: "default", toolName: "bash", input: { command: "cat ~/.ssh/config" } },
     { label: "bypass bash $HOME protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/.ssh/config" } },
+    { label: "bypass bash normalized protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/.config/../.ssh/config" } },
     { label: "strict bash ${HOME} protected path", mode: "strict", toolName: "bash", input: { command: "cat ${HOME}/.ssh/config" } },
     { label: "default bash quoted protected path", mode: "default", toolName: "bash", input: { command: "cat ~/\".ssh\"/config" } },
+    { label: "default bash glob protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.s[s]h/config" } },
   ]) {
-    const h = await createHarness({ localConfig: testCase.localConfig });
+    const h = await createHarness({
+      localConfig: testCase.localConfig,
+      cwd: testCase.cwdForHome ? testCase.cwdForHome(TEST_HOME) : undefined,
+    });
     h.setFlag("permission-mode", testCase.mode);
     await h.sessionStart();
 
@@ -600,6 +685,8 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
 
 (async () => {
   await testStrictModeCanBeSelectedByFlag();
+  await testStrictModeCanBeSelectedByConfig();
+  await testConfiguredShiftTabCycleCanIncludeStrict();
   await testShiftTabCycleIncludesStrictWithoutReorderingExistingModes();
   await testPermissionsCommandListsStrict();
   await testStrictPromptsForOrdinaryReadTools();

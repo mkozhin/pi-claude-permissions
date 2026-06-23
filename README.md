@@ -35,7 +35,7 @@ Strongest confirmation mode.
 
 - Prompts before almost every tool call, matching the old broad-prompt `default` behavior.
 - Keeps session-level approvals for prompted operations.
-- Still blocks protected paths and catastrophic commands.
+- Still blocks catastrophic bash commands and bash/write/edit operations targeting configured protected paths before confirmation.
 - Use this when you want maximum confirmation instead of the more practical day-to-day `default` mode.
 
 ### `plan`

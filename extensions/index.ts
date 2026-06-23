@@ -100,6 +100,11 @@ const SENSITIVE_CREDENTIAL_PATH_SEGMENTS = new Set([".ssh", ".aws", ".gnupg", ".
 const SENSITIVE_CREDENTIAL_FILES = new Set([".npmrc", ".netrc"]);
 const SENSITIVE_FILE_STEMS = new Set(["credential", "credentials", "token", "tokens", "secret", "secrets", "auth", "id_rsa", "id_ed25519"]);
 const SEARCH_PATTERN_COMMANDS = new Set(["grep", "rg", "sed", "awk", "jq"]);
+const PATH_BEARING_BASH_OPTIONS = new Set([
+  "-f", "-g",
+  "--exclude", "--exclude-dir", "--file", "--from-file", "--glob", "--iglob", "--include",
+]);
+const SHORT_PATH_BEARING_BASH_OPTIONS = new Set(["-f", "-g"]);
 const DEFAULT_SAFE_BASH_COMMANDS = new Set([
   "cat", "head", "tail", "less", "more", "grep", "rg", "find", "ls",
   "pwd", "wc", "sort", "uniq", "diff", "file", "stat", "du", "df",
@@ -584,7 +589,7 @@ function enforceCustomMode(toolName: string, input: Record<string, unknown>, ctx
   }
 
   if (toolName === "write" || toolName === "edit") {
-    const targetPath = resolve(String(input.path ?? ""));
+    const targetPath = resolveReadPath(String(input.path ?? ""), ctx, homedir());
     if (!isPathInAllowedRoots(targetPath, ctx, policy.allowedWriteRoots)) {
       return { block: true as const, reason: `Write blocked outside allowed roots: ${targetPath}` };
     }
@@ -765,7 +770,7 @@ async function enforceAlwaysOnSafety(args: {
       }
     }
 
-    const protectedPath = findProtectedBashPath(command, home, protectedPaths);
+    const protectedPath = findProtectedBashPath(command, ctx, home, protectedPaths);
     if (protectedPath) {
       const readable = protectedPath.replace(home, "~");
       ctx.ui.notify(`🚫 Blocked bash targeting protected path: ${readable}`, "error");
@@ -774,8 +779,8 @@ async function enforceAlwaysOnSafety(args: {
   }
 
   if (toolName === "write" || toolName === "edit") {
-    const targetPath = resolve(String(input.path ?? ""));
-    const protectedPath = protectedPaths.find((path) => targetPath === path || targetPath.startsWith(path + "/"));
+    const targetPath = resolveReadPath(String(input.path ?? ""), ctx, home);
+    const protectedPath = findProtectedPathForResolvedPath(targetPath, protectedPaths);
     if (protectedPath) {
       ctx.ui.notify(`🚫 Blocked write to protected path: ${targetPath}`, "error");
       return { block: true as const, reason: `Protected path blocked: ${targetPath}. This cannot be overridden.` };
@@ -788,11 +793,28 @@ function isSessionAllowed(toolName: string, input: Record<string, unknown>, sess
   return sessionAllow.tools.has(toolName);
 }
 
-function findProtectedBashPath(command: string, home: string, protectedPaths: string[]): string | undefined {
-  const commandForms = [command, normalizeShellPathText(command, home)];
-  return protectedPaths.find((path) =>
-    commandForms.some((form) => form.includes(path) || form.includes(path.replace(home, "~"))),
-  );
+function findProtectedBashPath(command: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
+  for (const segment of splitShellCommandSegments(normalizeShellPathText(command, home))) {
+    for (const candidate of getBashPathCandidates(segment)) {
+      const protectedPath = findProtectedPathForInput(candidate, ctx, home, protectedPaths);
+      if (protectedPath) return protectedPath;
+    }
+  }
+}
+
+function splitShellCommandSegments(command: string): string[] {
+  return command.replace(/[<>]/g, " ").split(/[|;&\r\n]/);
+}
+
+function findProtectedPathForInput(rawPath: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
+  for (const path of getPathReferenceVariants(rawPath)) {
+    const protectedPath = findProtectedPathForResolvedPath(resolveReadPath(path, ctx, home), protectedPaths);
+    if (protectedPath) return protectedPath;
+  }
+}
+
+function findProtectedPathForResolvedPath(targetPath: string, protectedPaths: string[]): string | undefined {
+  return protectedPaths.find((path) => targetPath === path || targetPath.startsWith(path + "/"));
 }
 
 function isDefaultPreApprovedToolCall(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
@@ -801,7 +823,7 @@ function isDefaultPreApprovedToolCall(toolName: string, input: Record<string, un
 
 function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
   if (toolName === "bash") {
-    return !hasSensitiveBashReadPath(String(input.command ?? ""), ctx, home)
+    return findSensitiveBashReadPath(String(input.command ?? ""), ctx, home) === undefined
       && isSafeDefaultReadCommand(String(input.command ?? ""));
   }
   if (!DEFAULT_READ_TOOLS.has(toolName)) return false;
@@ -849,12 +871,8 @@ function getDirectReadNamePatternInputs(toolName: string, input: Record<string, 
   return patterns;
 }
 
-function hasSensitiveBashReadPath(command: string, ctx: UiContext, home: string): boolean {
-  return findSensitiveBashReadPath(command, ctx, home) !== undefined;
-}
-
 function findSensitiveBashReadPath(command: string, ctx: UiContext, home: string): string | undefined {
-  for (const segment of normalizeShellPathText(command, home).split("|")) {
+  for (const segment of splitShellCommandSegments(normalizeShellPathText(command, home))) {
     for (const candidate of getBashPathCandidates(segment)) {
       if (isSensitiveReadPath(candidate, ctx, home)) return candidate;
     }
@@ -911,8 +929,13 @@ function getPatternThenPathCandidates(args: string[]): string[] {
   const paths: string[] = [];
   let sawPattern = false;
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
     if (arg === "--") continue;
+    if (collectPathBearingOptionValue(args, i, paths)) {
+      i += 1;
+      continue;
+    }
     if (arg.startsWith("-")) continue;
     if (!sawPattern) {
       sawPattern = true;
@@ -922,6 +945,32 @@ function getPatternThenPathCandidates(args: string[]): string[] {
   }
 
   return paths;
+}
+
+function collectPathBearingOptionValue(args: string[], index: number, paths: string[]): boolean {
+  const arg = args[index]!;
+  if (!arg.startsWith("-") || arg === "--") return false;
+
+  const eqIndex = arg.indexOf("=");
+  if (eqIndex > 0) {
+    const option = arg.slice(0, eqIndex);
+    if (PATH_BEARING_BASH_OPTIONS.has(option)) paths.push(arg.slice(eqIndex + 1));
+    return false;
+  }
+
+  const shortOption = arg.slice(0, 2);
+  if (arg.length > 2 && SHORT_PATH_BEARING_BASH_OPTIONS.has(shortOption)) {
+    paths.push(arg.slice(2));
+    return false;
+  }
+
+  if (!PATH_BEARING_BASH_OPTIONS.has(arg)) return false;
+  const next = args[index + 1];
+  if (next && next !== "--") {
+    paths.push(next);
+    return true;
+  }
+  return false;
 }
 
 function getFindPathCandidates(args: string[]): string[] {
@@ -939,8 +988,29 @@ function getGenericPathCandidates(args: string[]): string[] {
 }
 
 function isSensitiveReadPath(rawPath: string, ctx: UiContext, home: string): boolean {
-  const candidates = [rawPath, resolveReadPath(rawPath, ctx, home)];
-  return candidates.some((candidate) => splitPathSegments(candidate).some(isSensitivePathSegment));
+  for (const path of getPathReferenceVariants(rawPath)) {
+    const candidates = [path, resolveReadPath(path, ctx, home)];
+    if (candidates.some((candidate) => splitPathSegments(candidate).some(isSensitivePathSegment))) return true;
+  }
+  return false;
+}
+
+function getPathReferenceVariants(rawPath: string): string[] {
+  const trimmed = rawPath.trim();
+  if (!trimmed) return [];
+
+  const variants = [trimmed];
+  const withoutGlob = stripGlobSyntax(trimmed);
+  if (withoutGlob !== trimmed) {
+    variants.push(withoutGlob);
+    variants.push(...withoutGlob.split(","));
+  }
+
+  return Array.from(new Set(variants.map((variant) => variant.trim()).filter((variant) => variant.length > 0)));
+}
+
+function stripGlobSyntax(value: string): string {
+  return value.replace(/[*?[\]{}]/g, "");
 }
 
 function resolveReadPath(rawPath: string, ctx: UiContext, home: string): string {
@@ -960,16 +1030,16 @@ function splitPathSegments(path: string): string[] {
 }
 
 function isSensitivePathSegment(segment: string): boolean {
-  const lower = segment.toLowerCase();
+  const lower = stripGlobSyntax(segment.toLowerCase());
   if (lower.startsWith(".env")) return true;
   if (SENSITIVE_CREDENTIAL_PATH_SEGMENTS.has(lower)) return true;
   if (SENSITIVE_CREDENTIAL_FILES.has(lower)) return true;
+  if (/(?:^|[-_.])(?:credential|credentials|token|tokens|secret|secrets|auth)(?:$|[-_.])/.test(lower)) return true;
+  if (/(?:^|[-_.])private[-_.]?key(?:$|[-_.])/.test(lower)) return true;
 
   const stem = getFilenameStem(lower);
   if (SENSITIVE_FILE_STEMS.has(stem)) return true;
   if (/^private[-_.]?key$/.test(stem)) return true;
-  if (/(?:^|[-_.])(?:credential|credentials|token|tokens|secret|secrets|auth)(?:$|[-_.])/.test(stem)) return true;
-  if (/(?:^|[-_.])private[-_.]?key(?:$|[-_.])/.test(stem)) return true;
   return false;
 }
 
@@ -1020,6 +1090,7 @@ function isSafeDefaultGitCommand(args: string[]): boolean {
   if (!subcommand) return false;
   const rest = args.slice(1);
 
+  if (hasOption(rest, "--output")) return false;
   if (subcommand === "status" || subcommand === "log" || subcommand === "show" || subcommand === "ls-files" || subcommand === "ls-tree") return true;
   if (subcommand === "diff") return !hasOption(rest, "--output");
   if (subcommand === "config") return rest[0] === "--get";
