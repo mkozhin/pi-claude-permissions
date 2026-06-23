@@ -17,6 +17,7 @@
     "gallery.png"
   ],
   "scripts": {
+    "test": "node tests/plan-ended-context.test.cjs",
     "typecheck": "tsc --noEmit",
     "pack:dry": "npm pack --dry-run"
   },

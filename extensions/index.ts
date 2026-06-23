@@ -175,6 +175,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
   let mode = normalizeMode(config.mode, defaultMode, modes);
   let previousActiveTools: string[] | null = null;
   let planContextPending = mode === "plan";
+  let planTurnObserved = false;
   let planEndedContextPending = false;
 
   const clearSessionAllows = () => {
@@ -220,13 +221,15 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     if (enteringPlan || nextMode === "plan") {
       enterPlanToolScope();
       planContextPending = true;
+      if (enteringPlan) planTurnObserved = false;
       planEndedContextPending = false;
       ctx.ui.notify("In plan mode, only read files/search tools are allowed.", "info");
     } else {
       if (leavingPlan) {
         restoreToolsAfterPlan();
         planContextPending = false;
-        planEndedContextPending = true;
+        planEndedContextPending = planTurnObserved;
+        planTurnObserved = false;
         ctx.ui.notify("Plan mode ended", "info");
       }
       ctx.ui.notify(`Permission mode: ${getModeMeta(mode, modes).label}`, "info");
@@ -252,6 +255,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
       restoreToolsAfterPlan();
       planContextPending = false;
     }
+    planTurnObserved = false;
     planEndedContextPending = false;
 
     registerPowerbarSegment(pi);
@@ -288,6 +292,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
   pi.on("before_agent_start", async () => {
     if (mode === "plan" && planContextPending) {
       planContextPending = false;
+      planTurnObserved = true;
       return {
         message: {
           customType: "plan-mode-context",
