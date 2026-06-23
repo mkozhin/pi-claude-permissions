@@ -88,6 +88,7 @@ const BUILT_IN_MODES: ModeDefinition[] = [
   { id: "plan", label: "Plan", description: "Read-only exploration; only read/search tools and safe bash", status: "⏸" },
   { id: "acceptEdits", label: "Accept Edits", description: "Allow write/edit silently, confirm bash", status: "⏵⏵" },
   { id: "bypassPermissions", label: "Bypass Permissions", description: "Allow everything except catastrophic/protected operations", status: "⏵⏵⏵⏵" },
+  { id: "strict", label: "Strict", description: "Ask before almost every tool call", status: "⏵!" },
 ];
 
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "rg", "fd", "bat", "eza", "mcp"];
@@ -145,7 +146,7 @@ The user toggled out of plan mode. You may now execute the plan using the active
 
 export default async function permissionExtension(pi: ExtensionAPI) {
   pi.registerFlag("permission-mode", {
-    description: "Permission mode (default, plan, acceptEdits, bypassPermissions)",
+    description: "Permission mode (default, plan, acceptEdits, bypassPermissions, strict)",
     type: "string",
     default: "",
   });

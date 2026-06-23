@@ -128,11 +128,11 @@
 - Modify: `extensions/index.ts`
 - Test: `tests/plan-ended-context.test.cjs` or new `tests/permission-modes.test.cjs`
 
-- [ ] Add `strict` to `BUILT_IN_MODES` with clear label, description, and status indicator.
-- [ ] Keep `DEFAULT_MODE` set to `"default"` and verify `normalizeMode()` accepts `strict` through the built-in mode list.
-- [ ] Ensure `/permissions` lists `strict` automatically via `modes.map(...)` without special cases.
-- [ ] Add/update harness tests proving `strict` is reachable through mode cycling or config/flag normalization behavior.
-- [ ] Run focused tests: `npm run test` — must pass before next task.
+- [x] Add `strict` to `BUILT_IN_MODES` with clear label, description, and status indicator.
+- [x] Keep `DEFAULT_MODE` set to `"default"` and verify `normalizeMode()` accepts `strict` through the built-in mode list.
+- [x] Ensure `/permissions` lists `strict` automatically via `modes.map(...)` without special cases.
+- [x] Add/update harness tests proving `strict` is reachable through mode cycling or config/flag normalization behavior.
+- [x] Run focused tests: `npm run test` — must pass before next task.
 
 ### Task 2: Refactor tool-call enforcement to distinguish `default` from `strict`
 
