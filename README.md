@@ -21,7 +21,7 @@ Upstream is preserved as the `upstream` git remote so we can pull fixes later, w
 
 Day-to-day confirmation mode.
 
-- Allows ordinary read/search/list operations without confirmation: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`, and safe read-only `bash` commands such as `ls`, `grep`, `cat`, `git status`, and `git diff`.
+- Allows ordinary read/search/list operations without confirmation: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`, and safe read-only `bash` commands such as `ls`, file-specific `grep`, `cat`, and `git status`.
 - Prompts before reading likely-secret paths such as `.env*`, `.ssh`, `.aws`, `.gnupg`, `.gpg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, and credential/token/secret/private-key/auth-named files.
 - Allows workflow tools `manage_todo_list` and `ask_user` without confirmation.
 - Prompts before `write`, `edit`, mutating or suspicious `bash` commands, and any other tool outside the read/search/list and workflow allowlists.

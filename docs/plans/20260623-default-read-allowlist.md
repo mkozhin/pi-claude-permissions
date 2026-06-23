@@ -94,7 +94,7 @@ Status: Completed on 2026-06-23.
   - Include direct read/search/list tool-call names when Pi exposes them as tools: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`.
   - For `bash`, allow only commands that are ordinary read/list/search commands under conservative restrictions: no output redirection except `2>/dev/null`, no append `>>`, no `sed -i`, no `tee`/`sponge`/`dd` write sinks. Prefer a dedicated default-mode predicate over blindly reusing plan-mode behavior.
   - Tighten safe-bash validation for metacharacters/chaining before auto-allowing: test and reject cases like `cat file > out`, `grep x file | tee out`, `find . -exec rm {} \\;`, `cat .env && echo ok`, command substitution that executes mutating commands, and semicolon chains with mutations.
-  - Candidate read-only bash prefixes can reuse `SAFE_PLAN_BASH_PREFIXES`, but consider excluding network-ish commands from default auto-allow if they are too broad. If kept, document that default allows read-only metadata commands like `git status`, `git log`, and `npm view` only when they pass the safe-command check.
+  - Candidate read-only bash prefixes can reuse `SAFE_PLAN_BASH_PREFIXES`, but consider excluding network-ish commands from default auto-allow if they are too broad. Default should prompt for diff-producing or pager/config-sensitive Git commands like `git diff`, `git log`, and `git show`.
 - Sensitive read detection:
   - Resolve path-like values relative to `ctx.cwd ?? process.cwd()` and `home` when possible.
   - For direct path tools, inspect likely path fields: `path`, `paths`, `file`, `files`, `glob` only when it contains a concrete sensitive segment; avoid treating every glob as secret.
@@ -157,7 +157,7 @@ Status: Completed on 2026-06-23.
 - [x] Define the direct default read allowlist: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`.
 - [x] Allow those tools in `default` only when sensitive-read helpers report no sensitive path.
 - [x] Allow safe read-only bash in `default` using a dedicated `isSafeDefaultReadCommand()` predicate, or reuse `isSafePlanCommand()` only after verifying it allows only ordinary read/list/search behavior suitable for `default`.
-- [x] Add tests for allowed direct reads/searches and safe bash commands such as `ls`, `grep`, `cat`, `git status`, and `git diff`.
+- [x] Add tests for allowed direct reads/searches and safe bash commands such as `ls`, file-specific `grep`, `cat`, and `git status`.
 - [x] Add tests that shell metacharacters/redirection/chaining do not bypass prompting: `cat file > out`, `grep x file | tee out`, `find . -exec rm {} \\;`, command substitution with mutation, and semicolon/`&&` mutation chains.
 - [x] Add tests that `write`, `edit`, and mutating bash still prompt in `default`.
 - [x] Run focused tests: `npm run test` — must pass before next task.
