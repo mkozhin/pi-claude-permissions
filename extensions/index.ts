@@ -93,6 +93,7 @@ const BUILT_IN_MODES: ModeDefinition[] = [
 
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "rg", "fd", "bat", "eza", "mcp"];
 const GATED_TOOLS = new Set(["write", "edit", "bash"]);
+const DEFAULT_ALWAYS_ALLOWED_TOOLS = new Set(["manage_todo_list", "ask_user"]);
 const DEFAULT_READ_TOOLS = new Set(["read", "grep", "find", "ls", "rg", "fd", "bat", "eza"]);
 const DIRECT_READ_PATH_INPUT_KEYS = new Set(["path", "paths", "file", "files", "glob"]);
 const SENSITIVE_CREDENTIAL_PATH_SEGMENTS = new Set([".ssh", ".aws", ".gnupg", ".gpg", ".kube", ".docker"]);
@@ -786,7 +787,7 @@ function isSessionAllowed(toolName: string, input: Record<string, unknown>, sess
 }
 
 function isDefaultPreApprovedToolCall(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
-  return isDefaultAllowedReadTool(toolName, input, ctx, home);
+  return DEFAULT_ALWAYS_ALLOWED_TOOLS.has(toolName) || isDefaultAllowedReadTool(toolName, input, ctx, home);
 }
 
 function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {

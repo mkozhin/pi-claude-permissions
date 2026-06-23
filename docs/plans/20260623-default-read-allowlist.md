@@ -179,12 +179,12 @@
 - Modify: `extensions/index.ts`
 - Test: `tests/permission-modes.test.cjs` or existing harness test file
 
-- [ ] Add `DEFAULT_ALWAYS_ALLOWED_TOOLS` or equivalent containing `manage_todo_list` and `ask_user`.
-- [ ] In `default`, return early for those tools after always-on safety checks and before `promptApproval()`.
-- [ ] Confirm this is name-based and harmless when the extensions are not installed; it only affects calls if those tool names exist.
-- [ ] Add tests that `default` allows `manage_todo_list` and `ask_user` without invoking `ctx.ui.select`.
-- [ ] Add tests that `strict` still prompts for these tools unless the implementation intentionally documents a broader exception.
-- [ ] Run focused tests: `npm run test` — must pass before next task.
+- [x] Add `DEFAULT_ALWAYS_ALLOWED_TOOLS` or equivalent containing `manage_todo_list` and `ask_user`.
+- [x] In `default`, return early for those tools after always-on safety checks and before `promptApproval()`.
+- [x] Confirm this is name-based and harmless when the extensions are not installed; it only affects calls if those tool names exist.
+- [x] Add tests that `default` allows `manage_todo_list` and `ask_user` without invoking `ctx.ui.select`.
+- [x] Add tests that `strict` still prompts for these tools unless the implementation intentionally documents a broader exception.
+- [x] Run focused tests: `npm run test` — must pass before next task.
 
 ### Task 6: Regression-test always-on safety precedence and session approvals
 

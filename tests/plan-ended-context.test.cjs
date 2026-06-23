@@ -310,6 +310,34 @@ async function testDefaultAllowsOrdinaryDotPathReadsWithoutPrompt() {
   assert.equal(h.selectCallCount(), 0, "ordinary dot paths should not invoke confirmation UI");
 }
 
+async function testDefaultAllowsWorkflowToolsWithoutPrompt() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  for (const toolName of ["manage_todo_list", "ask_user"]) {
+    const result = await h.toolCall(toolName, { operation: "test" });
+    assert.equal(result, undefined, `default should allow workflow tool by name: ${toolName}`);
+  }
+
+  assert.equal(h.selectCallCount(), 0, "default workflow tool allowlist should not invoke confirmation UI");
+}
+
+async function testStrictPromptsForWorkflowTools() {
+  for (const toolName of ["manage_todo_list", "ask_user"]) {
+    const h = await createHarness();
+    h.setFlag("permission-mode", "strict");
+    await h.sessionStart();
+
+    const result = await h.toolCall(toolName, { operation: "test" });
+
+    assert.equal(h.selectCallCount(), 1, `strict should prompt for workflow tool: ${toolName}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, `User denied ${toolName}`);
+    assert.equal(h.lastSelectPrompt(), `🔒 ${toolName}`);
+  }
+}
+
 async function testCyclingThroughPlanDoesNotInjectEndedContext() {
   const h = await createHarness();
   await h.sessionStart();
@@ -349,6 +377,8 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testDefaultPromptsForSensitiveDirectReads();
   await testDefaultPromptsForSensitiveBashReads();
   await testDefaultAllowsOrdinaryDotPathReadsWithoutPrompt();
+  await testDefaultAllowsWorkflowToolsWithoutPrompt();
+  await testStrictPromptsForWorkflowTools();
   await testCyclingThroughPlanDoesNotInjectEndedContext();
   await testLeavingAfterPlanTurnInjectsEndedContext();
   console.log("plan-ended-context tests passed");
