@@ -23,8 +23,8 @@ Day-to-day confirmation mode.
 
 - Allows ordinary bounded read/search/list operations without confirmation: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`, and safe read-only `bash` commands such as `ls`, file-specific `grep`/`rg`, `cat`, and `git status`.
 - Broad directory searches may still prompt when they could sweep likely-secret files, including `grep`/`rg` over `.` without a safe narrowing glob and `find`/`fd` calls without a concrete name or pattern.
-- Default auto-approves only simple read-only bash syntax. It prompts for shell chaining, command substitution, redirection, write-capable options, recursive `grep`, broad `rg`, hidden/unrestricted `fd`, and diff-producing or pager/config-sensitive Git commands such as `git diff`, `git log`, and `git show`.
-- Prompts before reading likely-secret paths such as `.env*`, `.ssh`, `.aws`, `.gnupg`, `.gpg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, and credential/token/secret/private-key/auth-named files.
+- Default auto-approves only simple read-only bash syntax, including simple pipelines when every segment is an allowed read-only command. It prompts for control-flow chaining, command substitution, redirection other than `2>/dev/null`, write-capable options, recursive `grep`, broad `rg`, hidden/unrestricted `fd`, and diff-producing or pager/config-sensitive Git commands such as `git diff`, `git log`, `git show`, and `git config`.
+- Prompts before reading likely-secret paths such as `.env*`, `.ssh`, `.aws`, `.gnupg`, `.gpg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, and credential/token/secret/private-key/auth-named files. This also applies when a read/search/list tool or defaulting bash command would read from a likely-secret current working directory.
 - Allows workflow tools `manage_todo_list` and `ask_user` without confirmation.
 - Prompts before `write`, `edit`, mutating or suspicious `bash` commands, and any other tool outside the read/search/list and workflow allowlists.
 - Keeps session-level approvals for prompted operations.
@@ -63,6 +63,8 @@ Blocked in plan mode:
 - `write`
 - mutating bash commands
 - anything outside the read/search allowlist
+
+Catastrophic bash commands and bash/write/edit operations targeting configured protected paths are blocked before plan-mode allow or deny handling.
 
 When entering plan mode, the extension notifies:
 
@@ -156,6 +158,8 @@ The segment uses the same short Claude-like labels as the built-in status fallba
 | `strict` | `⏵! Strict` |
 
 The extension also supports `customModes` for project-specific policies. We can shape this further as our needs become clear.
+
+Custom modes cannot override the always-on catastrophic command checks or protected-path blocks for bash/write/edit operations. Those checks run before custom policies, bypass mode, and session approvals.
 
 ## Development
 

@@ -395,7 +395,10 @@ export default async function permissionExtension(pi: ExtensionAPI) {
 
     if (isSessionAllowed(toolName, event.input, sessionAllow)) return;
 
-    if (mode === "default" && isDefaultPreApprovedToolCall(toolName, event.input, ctx, home)) return;
+    if (mode === "default" && (
+      DEFAULT_ALWAYS_ALLOWED_TOOLS.has(toolName)
+      || isDefaultAllowedReadTool(toolName, event.input, ctx, home)
+    )) return;
 
     if (!ctx.hasUI) {
       return { block: true as const, reason: `Blocked ${toolName} (no UI for confirmation, mode: ${mode})` };
@@ -849,10 +852,6 @@ function findProtectedPathForResolvedPath(targetPath: string, protectedPaths: st
 function findProtectedPathForGlobPattern(targetPath: string, protectedPaths: string[]): string | undefined {
   if (!hasGlobSyntax(targetPath)) return;
   return protectedPaths.find((path) => pathPatternMayReferencePath(targetPath, path));
-}
-
-function isDefaultPreApprovedToolCall(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
-  return DEFAULT_ALWAYS_ALLOWED_TOOLS.has(toolName) || isDefaultAllowedReadTool(toolName, input, ctx, home);
 }
 
 function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
@@ -1579,12 +1578,19 @@ function isSafeDefaultReadCommandSegment(segment: string): boolean {
   if (commandIndex < 0) return false;
   if (commandIndex > 0) return false;
 
-  const commandName = getCommandName(tokens[commandIndex]!);
+  const commandToken = tokens[commandIndex]!;
+  if (isPathQualifiedCommandToken(commandToken)) return false;
+
+  const commandName = commandToken.toLowerCase();
   const args = tokens.slice(commandIndex + 1);
 
   if (commandName === "git") return isSafeDefaultGitCommand(args);
   if (!DEFAULT_SAFE_BASH_COMMANDS.has(commandName)) return false;
   return !hasUnsafeDefaultReadOptions(commandName, args);
+}
+
+function isPathQualifiedCommandToken(token: string): boolean {
+  return token.includes("/") || token.includes("\\");
 }
 
 function isSafeDefaultGitCommand(args: string[]): boolean {
@@ -1594,7 +1600,7 @@ function isSafeDefaultGitCommand(args: string[]): boolean {
 
   if (hasOption(rest, "--output")) return false;
   if (subcommand === "status" || subcommand === "ls-files" || subcommand === "ls-tree") return true;
-  if (subcommand === "config") return rest[0] === "--get" && !hasGitConfigPathOption(rest);
+  if (subcommand === "config") return false;
   if (subcommand === "remote") return rest.length === 0 || rest.every((arg) => arg === "-v" || arg === "--verbose");
   if (subcommand === "branch") {
     return rest.every((arg) =>
@@ -1644,14 +1650,6 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[]): boole
   }
 
   return false;
-}
-
-function hasGitConfigPathOption(args: string[]): boolean {
-  return args.some((arg) =>
-    GIT_CONFIG_PATH_OPTIONS.has(arg)
-    || arg.startsWith("--file=")
-    || (arg.startsWith("-f") && arg.length > 2),
-  );
 }
 
 function hasUnsafeSpecialDeviceRead(args: string[]): boolean {
@@ -1892,11 +1890,19 @@ function rmRfPatterns() {
 
 function resolveAbsoluteShellTarget(target: string, home = homedir()): string | null {
   const normalized = normalizeShellPathText(target, home);
+  const homeParameterTarget = resolveHomeParameterShellTarget(normalized, home);
+  if (homeParameterTarget) return homeParameterTarget;
   if (normalized === "~") return home;
   if (normalized.startsWith("~/")) return resolve(home, normalized.slice(2));
   if (normalized === "/*") return "/";
   if (normalized.startsWith("/")) return resolve(normalized);
   return null;
+}
+
+function resolveHomeParameterShellTarget(target: string, home: string): string | null {
+  const match = target.match(/^\$\{HOME(?:(?::[-=?+][^}]*)|(?:[-?+][^}]*)|(?:=[^}]*))?\}(?:\/(.*))?$/);
+  if (!match) return null;
+  return match[1] ? resolve(home, match[1]) : home;
 }
 
 function resolveShellTarget(target: string, cwd: string): string {
@@ -1949,7 +1955,7 @@ function describeApprovalRequest(
 ): { icon: string; description: string } {
   if (toolName === "write") return { icon: "🔒", description: `write: ${input.path}` };
   if (toolName === "edit") return { icon: "🔒", description: `edit: ${input.path}` };
-  if (toolName !== "bash") return { icon: "🔒", description: toolName };
+  if (toolName !== "bash") return { icon: "🔒", description: describeNonBashApprovalRequest(toolName, input) };
 
   const command = String(input.command ?? "");
   const catastrophe = allowCatastrophic ? undefined : findMatch(command, catastrophicPatterns);
@@ -1960,4 +1966,23 @@ function describeApprovalRequest(
   if (danger) return { icon: "⚠️", description: `bash: ${command}\n   ⚠️  DANGEROUS: ${danger.description}` };
   if (rmDanger) return { icon: "⚠️", description: `bash: ${command}\n   ⚠️  DANGEROUS: ${rmDanger.description}` };
   return { icon: "🔒", description: `bash: ${command}` };
+}
+
+function describeNonBashApprovalRequest(toolName: string, input: Record<string, unknown>): string {
+  const parts = getApprovalInputParts(input);
+  return parts.length > 0 ? `${toolName}: ${truncateApprovalDescription(parts.join(", "))}` : toolName;
+}
+
+function getApprovalInputParts(input: Record<string, unknown>): string[] {
+  const parts: string[] = [];
+  for (const key of ["path", "paths", "file", "files", "glob", "pattern", "name"]) {
+    const values: string[] = [];
+    collectStringValues(input[key], values);
+    if (values.length > 0) parts.push(`${key}=${values.join("|")}`);
+  }
+  return parts;
+}
+
+function truncateApprovalDescription(value: string): string {
+  return value.length > 240 ? `${value.slice(0, 237)}...` : value;
 }
