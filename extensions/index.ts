@@ -121,8 +121,16 @@ const FIND_PATH_PREDICATES = new Set([
 ]);
 const GIT_PATH_BEARING_OPTIONS = new Set(["-C", "--git-dir", "--work-tree"]);
 const GIT_VALUE_OPTIONS = new Set(["-c", "--config-env"]);
+const GIT_CONFIG_PATH_OPTIONS = new Set(["-f", "--file"]);
+const FD_OPTIONS_WITH_VALUE = new Set([
+  "-d", "-E", "-e", "-j", "-t",
+  "--and", "--base-directory", "--changed-before", "--changed-within", "--color",
+  "--exclude", "--extension", "--format", "--glob", "--hyperlink-format",
+  "--ignore-file", "--max-depth", "--min-depth", "--owner", "--path-separator",
+  "--search-path", "--threads", "--type",
+]);
 const DEFAULT_SAFE_BASH_COMMANDS = new Set([
-  "cat", "head", "tail", "less", "more", "grep", "rg", "find", "ls",
+  "cat", "head", "tail", "grep", "rg", "find", "ls",
   "pwd", "wc", "sort", "uniq", "diff", "file", "stat", "du", "df",
   "tree", "which", "whereis", "type", "echo", "printf", "jq", "fd",
   "bat", "eza",
@@ -1033,12 +1041,17 @@ function getShellExpansionPathCandidates(tokens: string[], assignments: Map<stri
 
 function getShellExpansionVariants(token: string, assignments: Map<string, string>, home: string): string[] {
   const variants = new Set<string>();
-  const homeExpanded = token
-    .replace(/\$\{HOME[^}]*\}/g, home)
+  const exactHomeExpanded = token
+    .replace(/\$\{HOME\}/g, home)
     .replace(/\$HOME\b/g, home);
-  if (homeExpanded !== token) variants.add(homeExpanded);
+  if (exactHomeExpanded !== token) variants.add(exactHomeExpanded);
 
-  let assignedExpanded = homeExpanded;
+  const complexHomeCollapsed = token
+    .replace(/(?:\$\{HOME[^}]+\})+/g, "~")
+    .replace(/\$HOME\b/g, home);
+  if (complexHomeCollapsed !== token) variants.add(complexHomeCollapsed);
+
+  let assignedExpanded = exactHomeExpanded;
   for (const [name, value] of assignments) {
     const escapedName = escapeRegExp(name);
     assignedExpanded = assignedExpanded
@@ -1047,7 +1060,7 @@ function getShellExpansionVariants(token: string, assignments: Map<string, strin
   }
   if (assignedExpanded !== token) variants.add(assignedExpanded);
 
-  const wildcardExpanded = homeExpanded
+  const wildcardExpanded = exactHomeExpanded
     .replace(/\$\{[A-Za-z_][A-Za-z0-9_]*(?::[^}]*)?\}/g, "*")
     .replace(/\$[A-Za-z_][A-Za-z0-9_]*/g, "*");
   if (wildcardExpanded !== token) variants.add(wildcardExpanded);
@@ -1248,7 +1261,12 @@ function getGitPathCandidates(args: string[]): string[] {
   }
 
   if (subcommandIndex < 0 || subcommandIndex >= args.length) return paths;
-  return uniqueStrings([...paths, ...getGenericPathCandidates(args.slice(subcommandIndex + 1))]);
+  const subcommand = args[subcommandIndex]!;
+  const rest = args.slice(subcommandIndex + 1);
+  const subcommandPathCandidates = subcommand === "config"
+    ? getGitConfigPathCandidates(rest)
+    : getGenericPathCandidates(rest);
+  return uniqueStrings([...paths, ...subcommandPathCandidates]);
 }
 
 function collectGitPathOptionValue(args: string[], index: number, paths: string[]): { consumeNext: boolean } | undefined {
@@ -1281,6 +1299,43 @@ function consumesGitOptionValue(args: string[], index: number): boolean {
   if (arg === "-c" || arg === "--config-env") return args[index + 1] !== undefined && args[index + 1] !== "--";
   if (arg.startsWith("-c") && arg.length > 2) return false;
   return GIT_VALUE_OPTIONS.has(arg);
+}
+
+function getGitConfigPathCandidates(args: string[]): string[] {
+  const paths: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const pathOption = collectGitConfigPathOptionValue(args, i, paths);
+    if (pathOption) {
+      if (pathOption.consumeNext) i += 1;
+      continue;
+    }
+  }
+  return uniqueStrings([...paths, ...getGenericPathCandidates(args)]);
+}
+
+function collectGitConfigPathOptionValue(args: string[], index: number, paths: string[]): { consumeNext: boolean } | undefined {
+  const arg = args[index]!;
+  const eqIndex = arg.indexOf("=");
+  if (eqIndex > 0) {
+    const option = arg.slice(0, eqIndex);
+    if (GIT_CONFIG_PATH_OPTIONS.has(option)) {
+      paths.push(arg.slice(eqIndex + 1));
+      return { consumeNext: false };
+    }
+  }
+
+  if (arg.length > 2 && arg.startsWith("-f")) {
+    paths.push(arg.slice(2));
+    return { consumeNext: false };
+  }
+
+  if (!GIT_CONFIG_PATH_OPTIONS.has(arg)) return;
+  const next = args[index + 1];
+  if (next && next !== "--") {
+    paths.push(next);
+    return { consumeNext: true };
+  }
+  return { consumeNext: false };
 }
 
 function getGenericPathCandidates(args: string[]): string[] {
@@ -1478,7 +1533,7 @@ function isSafeDefaultGitCommand(args: string[]): boolean {
 
   if (hasOption(rest, "--output")) return false;
   if (subcommand === "status" || subcommand === "ls-files" || subcommand === "ls-tree") return true;
-  if (subcommand === "config") return rest[0] === "--get";
+  if (subcommand === "config") return rest[0] === "--get" && !hasGitConfigPathOption(rest);
   if (subcommand === "remote") return rest.length === 0 || rest.every((arg) => arg === "-v" || arg === "--verbose");
   if (subcommand === "branch") {
     return rest.every((arg) =>
@@ -1490,8 +1545,11 @@ function isSafeDefaultGitCommand(args: string[]): boolean {
 }
 
 function hasUnsafeDefaultReadOptions(commandName: string, args: string[]): boolean {
+  if (hasUnsafeSpecialDeviceRead(args)) return true;
+
   if (commandName === "find") {
-    return args.some((arg) => /^-(?:delete|exec(?:dir)?|ok(?:dir)?|fls|fprint0?|fprintf)$/.test(arg));
+    return args.some((arg) => /^-(?:delete|exec(?:dir)?|ok(?:dir)?|fls|fprint0?|fprintf)$/.test(arg))
+      || hasUnsafeDefaultFindTraversal(args);
   }
 
   if (commandName === "grep") {
@@ -1506,9 +1564,11 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[]): boole
       || arg.startsWith("--exec=") || arg.startsWith("--exec-batch="),
     )
       || hasShortFlag(args, "H") || hasShortFlag(args, "I") || hasShortFlag(args, "u")
-      || hasOption(args, "--hidden") || hasOption(args, "--no-ignore") || hasOption(args, "--unrestricted");
+      || hasOption(args, "--hidden") || hasOption(args, "--no-ignore") || hasOption(args, "--unrestricted")
+      || hasUnsafeDefaultFdTraversal(args);
   }
 
+  if (commandName === "tail") return hasShortFlag(args, "f") || hasOption(args, "--follow");
   if (commandName === "less") return hasOption(args, "-o") || hasOption(args, "-O") || hasOption(args, "--log-file");
   if (commandName === "tree") return hasOption(args, "-o") || hasOption(args, "--output");
   if (commandName === "sort") return hasOption(args, "-o") || hasOption(args, "--output");
@@ -1521,6 +1581,106 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[]): boole
   }
 
   return false;
+}
+
+function hasGitConfigPathOption(args: string[]): boolean {
+  return args.some((arg) =>
+    GIT_CONFIG_PATH_OPTIONS.has(arg)
+    || arg.startsWith("--file=")
+    || (arg.startsWith("-f") && arg.length > 2),
+  );
+}
+
+function hasUnsafeSpecialDeviceRead(args: string[]): boolean {
+  return args.some((arg) => /^\/dev\/(?:zero|u?random|full|[sh]d[a-z]|nvme\d+n\d+|disk\/)/.test(arg));
+}
+
+function hasUnsafeDefaultFindTraversal(args: string[]): boolean {
+  const roots = getFindSearchRoots(args);
+  if (roots.some(isBroadUnsafeSearchRoot)) return true;
+  return !getFindConstrainingPatterns(args).some(isConcreteNonCatchallSearchPattern);
+}
+
+function getFindSearchRoots(args: string[]): string[] {
+  const roots: string[] = [];
+  let beforeExpression = true;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--") continue;
+    if (arg === "(" || arg === "!" || arg === ")") {
+      beforeExpression = false;
+      continue;
+    }
+    if (beforeExpression && FIND_PREFIX_OPTIONS.has(arg)) continue;
+    if (beforeExpression && FIND_PREFIX_OPTIONS_WITH_VALUE.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (FIND_PATH_PREDICATES.has(arg)) {
+      beforeExpression = false;
+      i = indexAfterPredicate(args, i);
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      beforeExpression = false;
+      continue;
+    }
+    if (beforeExpression) roots.push(arg);
+  }
+
+  return roots.length > 0 ? roots : ["."];
+}
+
+function getFindConstrainingPatterns(args: string[]): string[] {
+  const patterns: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (!FIND_PATH_PREDICATES.has(arg)) continue;
+    const valueIndex = indexAfterPredicate(args, i);
+    const value = args[valueIndex];
+    if (value && value !== "--") patterns.push(value);
+    i = valueIndex;
+  }
+  return patterns;
+}
+
+function hasUnsafeDefaultFdTraversal(args: string[]): boolean {
+  const positional = getFdPositionalArgs(args);
+  const pattern = positional[0];
+  if (!pattern || !isConcreteNonCatchallSearchPattern(pattern)) return true;
+  return positional.slice(1).some(isBroadUnsafeSearchRoot);
+}
+
+function getFdPositionalArgs(args: string[]): string[] {
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--") {
+      positional.push(...args.slice(i + 1));
+      break;
+    }
+    if (!arg.startsWith("-")) {
+      positional.push(arg);
+      continue;
+    }
+    const eqIndex = arg.indexOf("=");
+    if (eqIndex > 0 && FD_OPTIONS_WITH_VALUE.has(arg.slice(0, eqIndex))) continue;
+    const shortOption = arg.slice(0, 2);
+    if (arg.length > 2 && FD_OPTIONS_WITH_VALUE.has(shortOption)) continue;
+    if (FD_OPTIONS_WITH_VALUE.has(arg) && args[i + 1] !== undefined && args[i + 1] !== "--") i += 1;
+  }
+  return positional;
+}
+
+function isConcreteNonCatchallSearchPattern(value: string): boolean {
+  const normalized = stripGlobSyntax(value.trim()).trim();
+  return normalized.length > 0 && normalized !== "." && normalized !== "/";
+}
+
+function isBroadUnsafeSearchRoot(value: string): boolean {
+  const normalized = value.trim();
+  return normalized === "/" || normalized === "~" || normalized === "$HOME" || normalized === "${HOME}";
 }
 
 function hasGrepRecursiveDirectoryOption(args: string[]): boolean {
