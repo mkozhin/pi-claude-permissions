@@ -116,6 +116,10 @@ const SHORT_PATH_BEARING_BASH_OPTIONS = new Set(["-f", "-g"]);
 const GENERIC_PATH_BEARING_BASH_OPTIONS = new Set(["--from-file", "--to-file", "--files0-from"]);
 const NO_SHORT_PATH_BEARING_BASH_OPTIONS = new Set<string>();
 const FD_SEARCH_ROOT_OPTIONS = new Set(["--base-directory", "--search-path"]);
+const FILE_COMMAND_FILE_LIST_OPTIONS = new Set(["--files-from"]);
+const FILE_COMMAND_SHORT_FILE_LIST_OPTIONS = new Set(["-f"]);
+const FIND_FILE_LIST_OPTIONS = new Set(["-files0-from"]);
+const GIT_FILE_CONSUMING_OPTIONS = new Set(["--exclude-from", "--exclude-per-directory", "--pathspec-from-file"]);
 const PATTERN_BEARING_BASH_OPTIONS = new Set(["-e", "--regexp", "--pattern", "--fixed-strings"]);
 const SHORT_PATTERN_BEARING_BASH_OPTIONS = new Set(["-e"]);
 const FIND_PREFIX_OPTIONS_WITH_VALUE = new Set(["-D"]);
@@ -862,8 +866,13 @@ function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknow
       && isSafeDefaultReadCommand(String(input.command ?? ""), ctx, home);
   }
   if (!DEFAULT_READ_TOOLS.has(toolName)) return false;
+  if (requiresExplicitDirectReadPath(toolName) && getDirectReadPathInputs(input).length === 0) return false;
   return !hasSensitiveDirectReadPath(toolName, input, ctx, home)
     && !hasProtectedDirectReadPath(toolName, input, ctx, home, protectedPaths);
+}
+
+function requiresExplicitDirectReadPath(toolName: string): boolean {
+  return toolName === "read" || toolName === "bat";
 }
 
 function hasSensitiveDirectReadPath(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
@@ -1002,7 +1011,9 @@ function getBashPathCandidates(segment: string, home: string): string[] {
   else if (commandName === "fd") parsedPathCandidates = getFdPathCandidates(args);
   else if (commandName === "rg" && hasOption(args, "--files")) parsedPathCandidates = getAllPositionalPathCandidates(args);
   else if (SEARCH_PATTERN_COMMANDS.has(commandName)) parsedPathCandidates = getPatternThenPathCandidates(args);
-  else parsedPathCandidates = getGenericPathCandidates(args);
+  else if (commandName === "file") {
+    parsedPathCandidates = getGenericPathCandidates(args, FILE_COMMAND_FILE_LIST_OPTIONS, FILE_COMMAND_SHORT_FILE_LIST_OPTIONS);
+  } else parsedPathCandidates = getGenericPathCandidates(args);
 
   return uniqueStrings([
     ...rawPathCandidates,
@@ -1015,10 +1026,42 @@ function normalizeShellPathText(value: string, home: string): string {
   return value
     .replace(/\$\{HOME\}/g, home)
     .replace(/\$HOME\b/g, home)
-    .replace(/\$'([^']*)'/g, "$1")
+    .replace(/\$'([^']*)'/g, (_match, content: string) => decodeAnsiCString(content))
     .replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/g, (_match, content: string) => content.replace(/\\(.)/g, "$1"))
     .replace(/'([^']*)'/g, "$1")
     .replace(/\\([^\s])/g, "$1");
+}
+
+function decodeAnsiCString(content: string): string {
+  return content.replace(/\\(?:x([0-9A-Fa-f]{1,2})|u\{([0-9A-Fa-f]+)\}|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([0-7]{1,3})|([abefnrtv\\'"]))/g, (
+    match: string,
+    hexByte?: string,
+    bracedUnicode?: string,
+    shortUnicode?: string,
+    longUnicode?: string,
+    octal?: string,
+    escaped?: string,
+  ) => {
+    const codePointText = hexByte ?? bracedUnicode ?? shortUnicode ?? longUnicode;
+    if (codePointText) {
+      const codePoint = Number.parseInt(codePointText, 16);
+      return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10FFFF
+        ? String.fromCodePoint(codePoint)
+        : match;
+    }
+    if (octal) return String.fromCharCode(Number.parseInt(octal, 8));
+    switch (escaped) {
+      case "a": return "\x07";
+      case "b": return "\b";
+      case "e": return "\x1B";
+      case "f": return "\f";
+      case "n": return "\n";
+      case "r": return "\r";
+      case "t": return "\t";
+      case "v": return "\v";
+      default: return escaped ?? match;
+    }
+  });
 }
 
 function tokenizeShellLike(value: string): string[] {
@@ -1297,6 +1340,12 @@ function getFindPathCandidates(args: string[]): string[] {
       beforeExpression = false;
       continue;
     }
+    const fileListOption = collectPathBearingOptionValue(args, i, paths, FIND_FILE_LIST_OPTIONS, NO_SHORT_PATH_BEARING_BASH_OPTIONS);
+    if (fileListOption) {
+      if (fileListOption.consumeNext) i += 1;
+      beforeExpression = false;
+      continue;
+    }
     if (beforeExpression && FIND_PREFIX_OPTIONS.has(arg)) continue;
     if (beforeExpression && FIND_PREFIX_OPTIONS_WITH_VALUE.has(arg)) {
       i += 1;
@@ -1347,7 +1396,7 @@ function getGitPathCandidates(args: string[]): string[] {
   const rest = args.slice(subcommandIndex + 1);
   const subcommandPathCandidates = subcommand === "config"
     ? getGitConfigPathCandidates(rest)
-    : getGenericPathCandidates(rest);
+    : getGenericPathCandidates(rest, GIT_FILE_CONSUMING_OPTIONS, NO_SHORT_PATH_BEARING_BASH_OPTIONS);
   return uniqueStrings([...paths, ...subcommandPathCandidates]);
 }
 
@@ -1420,7 +1469,11 @@ function collectGitConfigPathOptionValue(args: string[], index: number, paths: s
   return { consumeNext: false };
 }
 
-function getGenericPathCandidates(args: string[]): string[] {
+function getGenericPathCandidates(
+  args: string[],
+  pathOptions = GENERIC_PATH_BEARING_BASH_OPTIONS,
+  shortPathOptions = NO_SHORT_PATH_BEARING_BASH_OPTIONS,
+): string[] {
   const paths: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]!;
@@ -1432,8 +1485,8 @@ function getGenericPathCandidates(args: string[]): string[] {
       args,
       i,
       paths,
-      GENERIC_PATH_BEARING_BASH_OPTIONS,
-      NO_SHORT_PATH_BEARING_BASH_OPTIONS,
+      pathOptions,
+      shortPathOptions,
     );
     if (pathOption) {
       if (pathOption.consumeNext) i += 1;
@@ -1643,7 +1696,7 @@ function isSafeDefaultGitCommand(args: string[]): boolean {
   if (!subcommand) return false;
   const rest = args.slice(1);
 
-  if (hasOption(rest, "--output")) return false;
+  if (hasOption(rest, "--output") || hasPathBearingOption(args, GIT_FILE_CONSUMING_OPTIONS)) return false;
   if (subcommand === "status" || subcommand === "ls-files" || subcommand === "ls-tree") return true;
   if (subcommand === "config") return false;
   if (subcommand === "remote") return rest.length === 0 || rest.every((arg) => arg === "-v" || arg === "--verbose");
@@ -1661,6 +1714,7 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[], ctx: U
 
   if (commandName === "find") {
     return args.some((arg) => /^-(?:delete|exec(?:dir)?|ok(?:dir)?|fls|fprint0?|fprintf)$/.test(arg))
+      || hasPathBearingOption(args, FIND_FILE_LIST_OPTIONS)
       || hasUnsafeDefaultFindTraversal(args, ctx, home);
   }
 
@@ -1687,6 +1741,9 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[], ctx: U
   if (commandName === "tree") return true;
   if (commandName === "sort") return hasOption(args, "-o") || hasOption(args, "--output");
   if (commandName === "diff") return hasOption(args, "--output") || hasUnsafeDefaultDiffTraversal(args, ctx, home);
+  if (commandName === "file") {
+    return hasPathBearingOption(args, FILE_COMMAND_FILE_LIST_OPTIONS, FILE_COMMAND_SHORT_FILE_LIST_OPTIONS);
+  }
   if (commandName === "rg") {
     return hasOption(args, "--pre") || hasOption(args, "--hidden") || hasShortFlag(args, "u")
       || getRgGlobValues(args).some((glob) => glob.trim().startsWith("!"))
@@ -1716,6 +1773,12 @@ function getFindSearchRoots(args: string[]): string[] {
     const arg = args[i]!;
     if (arg === "--") continue;
     if (arg === "(" || arg === "!" || arg === ")") {
+      beforeExpression = false;
+      continue;
+    }
+    const fileListOption = collectPathBearingOptionValue(args, i, [], FIND_FILE_LIST_OPTIONS, NO_SHORT_PATH_BEARING_BASH_OPTIONS);
+    if (fileListOption) {
+      if (fileListOption.consumeNext) i += 1;
       beforeExpression = false;
       continue;
     }
@@ -1887,6 +1950,17 @@ function hasOption(args: string[], option: string): boolean {
   return args.some((arg) => arg === option || arg.startsWith(`${option}=`) || (option.length === 2 && arg.startsWith(option) && arg.length > 2));
 }
 
+function hasPathBearingOption(
+  args: string[],
+  pathOptions: Set<string>,
+  shortPathOptions = NO_SHORT_PATH_BEARING_BASH_OPTIONS,
+): boolean {
+  for (let i = 0; i < args.length; i += 1) {
+    if (collectPathBearingOptionValue(args, i, [], pathOptions, shortPathOptions)) return true;
+  }
+  return false;
+}
+
 function hasShortFlag(args: string[], flag: string): boolean {
   return args.some((arg) => arg.startsWith("-") && !arg.startsWith("--") && arg.slice(1).includes(flag));
 }
@@ -1906,7 +1980,8 @@ function hasUnsafePlanShellSyntax(command: string): boolean {
 
 function isSafePlanCommandSegment(segment: string): boolean {
   if (!segment) return false;
-  return SAFE_PLAN_BASH_PREFIXES.some((prefix) => shellSegmentMatchesSafePrefix(segment, prefix));
+  return SAFE_PLAN_BASH_PREFIXES.some((prefix) => shellSegmentMatchesSafePrefix(segment, prefix))
+    && !hasUnsafePlanCommandOptions(segment);
 }
 
 function shellSegmentMatchesSafePrefix(segment: string, prefix: string): boolean {
@@ -1916,14 +1991,40 @@ function shellSegmentMatchesSafePrefix(segment: string, prefix: string): boolean
   return next === undefined || /\s/.test(next);
 }
 
+function hasUnsafePlanCommandOptions(segment: string): boolean {
+  const tokens = tokenizeShellLike(segment).map(cleanShellToken).filter((token): token is string => token !== undefined);
+  const commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
+  if (commandIndex < 0) return true;
+
+  const commandName = getCommandName(tokens[commandIndex]!);
+  const args = tokens.slice(commandIndex + 1);
+
+  if (commandName === "curl") {
+    return hasOption(args, "-o")
+      || hasOption(args, "--output")
+      || hasOption(args, "--output-dir")
+      || hasShortFlag(args, "O")
+      || hasShortFlag(args, "J")
+      || hasOption(args, "--remote-name")
+      || hasOption(args, "--remote-header-name");
+  }
+
+  if (commandName === "npm" || commandName === "pnpm" || commandName === "yarn" || commandName === "bun") {
+    return args[0] === "audit" && args.slice(1).some((arg) => arg === "fix" || arg === "--fix" || arg.startsWith("--fix="));
+  }
+
+  if (commandName === "sed") {
+    return hasOption(args, "-i")
+      || hasOption(args, "--in-place")
+      || args.some((arg) => /(^|[;{\s])w(\s|$)/.test(arg));
+  }
+
+  return false;
+}
+
 function checkCriticalRmRf(command: string): string | null {
-  for (const pattern of rmRfPatterns()) {
-    const match = command.match(pattern);
-    if (!match) continue;
-
-    const home = homedir();
-    const targets = getRmRfTargets(match[1]!);
-
+  const home = homedir();
+  for (const targets of getRmRfTargetGroups(command, home)) {
     for (const target of targets) {
       const resolved = resolveAbsoluteShellTarget(target, home);
       if (!resolved) continue;
@@ -1935,20 +2036,11 @@ function checkCriticalRmRf(command: string): string | null {
     }
   }
 
-  if (/\bsudo\s+/.test(command)) {
-    const nested = checkCriticalRmRf(command.replace(/\bsudo\s+/, ""));
-    if (nested) return `sudo ${nested}`;
-  }
-
   return null;
 }
 
 function checkDangerousRmRf(command: string, cwd: string): { description: string } | null {
-  for (const pattern of rmRfPatterns()) {
-    const match = command.match(pattern);
-    if (!match) continue;
-
-    const targets = getRmRfTargets(match[1]!);
+  for (const targets of getRmRfTargetGroups(command)) {
     const normalizedCwd = resolve(cwd);
 
     for (const target of targets) {
@@ -1956,26 +2048,58 @@ function checkDangerousRmRf(command: string, cwd: string): { description: string
       if (normalized === normalizedCwd || normalized.startsWith(normalizedCwd + "/")) continue;
       return { description: `recursive force delete outside project (${target})` };
     }
-
-    return null;
   }
 
   return null;
 }
 
-function getRmRfTargets(rawArgs: string): string[] {
-  const beforeShellSeparator = rawArgs.trim().split(/\s*(?:&&|\|\||[;&|\r\n])\s*/)[0] ?? "";
-  return tokenizeShellLike(beforeShellSeparator)
-    .map((target) => target.trim())
-    .filter((target) => target.length > 0 && !target.startsWith("-"));
+function getRmRfTargetGroups(command: string, home = homedir()): string[][] {
+  const groups: string[][] = [];
+  for (const segment of splitShellCommandSegments(normalizeRmCommandText(command, home))) {
+    const tokens = tokenizeShellLike(segment).map((token) => token.trim()).filter((token) => token.length > 0);
+    for (let i = 0; i < tokens.length; i += 1) {
+      if (getCommandName(tokens[i]!) !== "rm") continue;
+      const targets = getRecursiveForceRmTargets(tokens.slice(i + 1));
+      if (targets.length > 0) groups.push(targets);
+    }
+  }
+  return groups;
 }
 
-function rmRfPatterns() {
-  return [
-    /\brm\s+(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*)\s+(.*)/i,
-    /\brm\s+-r\s+-f\s+(.*)/i,
-    /\brm\s+-f\s+-r\s+(.*)/i,
-  ];
+function normalizeRmCommandText(command: string, home: string): string {
+  return normalizeShellPathText(command, home).replace(/\$\{IFS\}|\$IFS\b/g, " ");
+}
+
+function getRecursiveForceRmTargets(args: string[]): string[] {
+  let recursive = false;
+  let force = false;
+  let endOfOptions = false;
+  const targets: string[] = [];
+
+  for (const arg of args) {
+    if (!endOfOptions && arg === "--") {
+      endOfOptions = true;
+      continue;
+    }
+
+    if (!endOfOptions && arg.startsWith("--")) {
+      const option = arg.slice(0, arg.indexOf("=") > 0 ? arg.indexOf("=") : arg.length);
+      if (option === "--recursive") recursive = true;
+      if (option === "--force") force = true;
+      continue;
+    }
+
+    if (!endOfOptions && /^-[A-Za-z]+$/.test(arg)) {
+      const flags = arg.slice(1);
+      if (/[rR]/.test(flags)) recursive = true;
+      if (flags.includes("f")) force = true;
+      continue;
+    }
+
+    targets.push(arg);
+  }
+
+  return recursive && force ? targets : [];
 }
 
 function resolveAbsoluteShellTarget(target: string, home = homedir()): string | null {

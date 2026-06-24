@@ -106,7 +106,7 @@ Status: Completed on 2026-06-23.
   - Explicitly allow ordinary non-secret dot paths such as `.gitignore`, `.github`, `.editorconfig`, `.prettierrc`, and docs/config files unless their name/path also matches a secret pattern.
 - Prompting sensitive reads:
   - Sensitive direct reads should not be hard-blocked by default; they should fall through to `promptApproval()` so the user can allow once/session.
-  - Protected paths already hard-block bash/write/edit; if direct read tools should also be hard-blocked for configured `protectedPaths`, add this deliberately and test it. Otherwise keep them as prompt-required sensitive reads.
+  - Direct read/search/list calls that reference built-in or custom `protectedPaths` are prompt-required in `default`; bash/write/edit references to protected paths remain non-overridable hard blocks.
 - Always-allowed workflow tools:
   - Add `manage_todo_list` and `ask_user` to a constant such as `DEFAULT_ALWAYS_ALLOWED_TOOLS`.
   - Apply this only in `default`, not in `strict`, unless the implementation deliberately decides `ask_user` should be globally safe. The requirement is specifically for `default`.
@@ -172,6 +172,7 @@ Status: Completed on 2026-06-23.
 - [x] Resolve direct tool path inputs relative to `ctx.cwd ?? process.cwd()` and `homedir()` where possible.
 - [x] Inspect bash command text for sensitive path segments before auto-allowing read-only bash.
 - [x] Add tests that `default` prompts for direct reads of `.env`, `.env.local`, `~/.ssh/config`, `.aws/credentials`, `.npmrc`, `.netrc`, `.kube/config`, and token/credential-named files.
+- [x] Add tests that `default` prompts for direct read/search/list calls referencing built-in or custom `protectedPaths`.
 - [x] Add tests that `default` does not prompt for ordinary non-secret dot paths like `.gitignore`, `.github/workflows/publish.yml`, and `.editorconfig`.
 - [x] Run focused tests: `npm run test` — must pass before next task.
 

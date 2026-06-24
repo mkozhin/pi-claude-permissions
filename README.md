@@ -25,6 +25,7 @@ Day-to-day confirmation mode.
 - Broad directory searches may still prompt when they could sweep likely-secret files, including `grep`/`rg` over `.` without a safe narrowing glob and `find`/`fd` calls without a concrete name or pattern.
 - Default auto-approves only simple read-only bash syntax, including simple pipelines when every segment is an allowed read-only command. It prompts for control-flow chaining, command substitution, redirection other than `2>/dev/null`, write-capable options, recursive `grep`, broad `rg`, hidden/unrestricted `fd`, and diff-producing or pager/config-sensitive Git commands such as `git diff`, `git log`, `git show`, and `git config`.
 - Prompts before reading likely-secret paths such as `.env*`, `.ssh`, `.aws`, `.gnupg`, `.gpg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, and credential/token/secret/private-key/auth-named files. This also applies when a read/search/list tool or defaulting bash command would read from a likely-secret current working directory.
+- Direct read/search/list calls that reference configured protected paths also prompt in `default`; bash/write/edit references to protected paths remain hard-blocked before confirmation and cannot be session-approved.
 - Allows workflow tools `manage_todo_list` and `ask_user` without confirmation.
 - Prompts before `write`, `edit`, mutating or suspicious `bash` commands, and any other tool outside the read/search/list and workflow allowlists.
 - Keeps session-level approvals for prompted operations.

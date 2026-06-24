@@ -277,8 +277,10 @@ async function testDefaultAllowsOrdinaryReadToolsWithoutPrompt() {
     ["read", { path: "README.md" }],
     ["ls", { path: "." }],
     ["grep", { pattern: "strict", path: "README.md" }],
+    ["grep", { pattern: "strict", path: ".", glob: "*.ts" }],
     ["find", { path: ".", pattern: "*.ts" }],
     ["rg", { pattern: "strict", path: "README.md" }],
+    ["rg", { pattern: "strict", path: ".", glob: "*.ts" }],
     ["fd", { pattern: "README" }],
     ["bat", { path: "README.md" }],
     ["eza", { path: "." }],
@@ -288,6 +290,29 @@ async function testDefaultAllowsOrdinaryReadToolsWithoutPrompt() {
   }
 
   assert.equal(h.selectCallCount(), 0, "default read allowlist should not invoke confirmation UI");
+}
+
+async function testDefaultPromptsForMissingFileReadInputs() {
+  for (const [toolName, input] of [
+    ["read", {}],
+    ["read", { path: "" }],
+    ["read", { path: null }],
+    ["read", { paths: [] }],
+    ["bat", {}],
+    ["bat", { file: "" }],
+    ["bat", { file: null }],
+    ["bat", { files: [] }],
+  ]) {
+    const h = await createHarness();
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall(toolName, input);
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt for missing ${toolName} file input: ${JSON.stringify(input)}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, `User denied ${toolName}`);
+  }
 }
 
 async function testDefaultAllowsSafeReadOnlyBashWithoutPrompt() {
@@ -369,9 +394,14 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     "git show HEAD",
     "git config --get user.email",
     "git config --get --file=.env foo.bar",
+    "git status --pathspec-from-file=paths.txt",
+    "git ls-files --exclude-from paths.txt",
     "GIT_EXTERNAL_DIFF=rm git diff",
     "GIT_PAGER=touch git log",
     "git checkout main",
+    "file --files-from paths.txt",
+    "file -fpaths.txt",
+    "find -files0-from paths.txt -name README.md",
     "sed -n 'w out.txt' README.md",
     "sed -n p .env",
     "awk pattern credentials.json",
@@ -565,6 +595,12 @@ async function testDefaultPromptsForSensitiveBashReads() {
     "cat credentials.json",
     "cat prod.secret.json",
     "cat service.auth.json",
+    "git status --pathspec-from-file=.env",
+    "git ls-files --exclude-from=.env",
+    "git ls-files --exclude-per-directory .env",
+    "file --files-from=.env",
+    "file -f.env",
+    "find -files0-from .env -name README.md",
     "diff --from-file=.env README.md",
     "diff --to-file=.env README.md",
     "wc --files0-from=.env",
@@ -689,6 +725,13 @@ async function testCatastrophicBashRunsBeforeAllowBranches() {
     { label: "bypass critical rm ${HOME:?} path", mode: "bypassPermissions", command: "rm -rf ${HOME:?}" },
     { label: "bypass critical rm semicolon separator path", mode: "bypassPermissions", command: "rm -rf /tmp; echo ok" },
     { label: "bypass critical rm pipe separator path", mode: "bypassPermissions", command: "rm -rf /tmp|cat" },
+    { label: "bypass second rm semicolon critical path", mode: "bypassPermissions", command: "rm -rf ./build; rm -rf /" },
+    { label: "bypass second rm and critical path", mode: "bypassPermissions", command: "rm -rf ./build && rm -rf /tmp" },
+    { label: "bypass second rm pipe critical path", mode: "bypassPermissions", command: "rm -rf ./build | rm -rf /usr" },
+    { label: "bypass long rm flags root path", mode: "bypassPermissions", command: "rm --recursive --force /" },
+    { label: "bypass mixed rm flags critical path", mode: "bypassPermissions", command: "rm -r --force /usr" },
+    { label: "bypass IFS-separated rm root path", mode: "bypassPermissions", command: "rm -rf${IFS}/" },
+    { label: "bypass ANSI-C quoted rm root path", mode: "bypassPermissions", command: "rm -rf $'\\x2f'" },
     { label: "default critical rm path", mode: "default", command: "rm -rf /tmp" },
     { label: "strict critical rm path", mode: "strict", command: "rm -rf /var" },
   ]) {
@@ -730,15 +773,23 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "bypass bash complex HOME protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ${HOME:0:1}${HOME:1}/.ssh/config" } },
     { label: "bypass grep regexp protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "grep --regexp=token ~/.ssh/config" } },
     { label: "bypass grep exclude-from protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "grep needle README.md --exclude-from=.ssh/config" }, cwdForHome: (home) => home },
+    { label: "bypass grep separated exclude-from protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "grep needle README.md --exclude-from .ssh/config" }, cwdForHome: (home) => home },
     { label: "bypass rg ignore-file protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "rg needle README.md --ignore-file=.ssh/config" }, cwdForHome: (home) => home },
+    { label: "bypass rg separated ignore-file protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "rg needle README.md --ignore-file .ssh/config" }, cwdForHome: (home) => home },
     { label: "bypass rg files protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "rg --files ~/.ssh" } },
     { label: "bypass fd search-path protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README --search-path=.ssh" }, cwdForHome: (home) => home },
+    { label: "bypass fd separated search-path protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README --search-path .ssh" }, cwdForHome: (home) => home },
     { label: "bypass fd base-directory protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README --base-directory=.ssh" }, cwdForHome: (home) => home },
+    { label: "bypass fd separated base-directory protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README --base-directory .ssh" }, cwdForHome: (home) => home },
     { label: "bypass fd ignore-file protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README --ignore-file=.ssh/config" }, cwdForHome: (home) => home },
+    { label: "bypass fd separated ignore-file protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README --ignore-file .ssh/config" }, cwdForHome: (home) => home },
     { label: "bypass find option protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "find -L ~/.ssh -type f" } },
     { label: "bypass find predicate protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "find ~ -path ~/.ssh -type f" } },
     { label: "bypass ssh attached config protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "ssh -F~/.ssh/config host" } },
     { label: "bypass git global protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "git --git-dir=~/.ssh status" } },
+    { label: "bypass git separated git-dir protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "git --git-dir .ssh status" }, cwdForHome: (home) => home },
+    { label: "bypass git separated work-tree protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "git --work-tree .ssh status" }, cwdForHome: (home) => home },
+    { label: "bypass git separated -C protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "git -C .ssh status" }, cwdForHome: (home) => home },
     { label: "bypass git relative global protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "git --git-dir=.ssh status" }, cwdForHome: (home) => home },
     { label: "bypass git assignment protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "GIT_DIR=.ssh git status" }, cwdForHome: (home) => home },
     { label: "bypass git config file protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "git config --get --file=~/.ssh/config core.filemode" } },
@@ -751,6 +802,7 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "default bash negated-class protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.s[!x]h/config" } },
     { label: "default bash broad hidden-glob protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.*/*" } },
     { label: "bypass bash command substitution protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ~/$(printf .ssh)/config" } },
+    { label: "bypass bash ANSI-C quoted protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/$'\\x2essh'/config" } },
     { label: "bypass git status protected cwd", mode: "bypassPermissions", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "default git status protected cwd", mode: "default", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
   ]) {
@@ -776,6 +828,11 @@ async function testPlanModeRejectsChainedOrMutatingBashSegments() {
     "cat README.md; rm -rf ./generated",
     "cat README.md & touch generated.txt",
     "cat README.md | touch generated.txt",
+    "curl -o generated.txt https://example.com/file",
+    "curl -O https://example.com/file",
+    "npm audit --fix",
+    "sed -n w generated.txt README.md",
+    "sed -n 'w out.txt' README.md",
   ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "plan");
@@ -859,10 +916,37 @@ async function testAllowCatastrophicTrueReachesNormalModeHandling() {
     await h.sessionStart();
 
     assert.equal(await h.toolCall("bash", { command: "rm -rf /tmp" }), undefined, `${label} allowCatastrophic should let catastrophic commands reach bypass handling`);
+    assert.equal(await h.toolCall("bash", { command: "sudo mkfs /dev/sda" }), undefined, `${label} allowCatastrophic should let configured catastrophic patterns reach bypass handling`);
 
     const protectedResult = await h.toolCall("bash", { command: "rm -rf ~/.ssh" });
     assertProtectedPathBlock(protectedResult, `${label} allowCatastrophic protected path`);
   }
+}
+
+async function testConfiguredCatastrophicPatternsBlockWhenNotAllowed() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "bypassPermissions");
+  await h.sessionStart();
+
+  const result = await h.toolCall("bash", { command: "sudo mkfs /dev/sda" });
+
+  assertCatastrophicBlock(result, "configured catastrophic pattern");
+  assert.equal(h.selectCallCount(), 0, "configured catastrophic pattern should not prompt before blocking");
+}
+
+async function testDangerouslySkipPermissionsStillRunsAlwaysOnSafety() {
+  const h = await createHarness();
+  h.setFlag("dangerously-skip-permissions", true);
+  await h.sessionStart();
+
+  assert.equal(h.status(), "⏵⏵⏵⏵ Bypass");
+  assert.equal(await h.toolCall("write", { path: "generated.txt" }), undefined, "dangerously skip flag should bypass ordinary prompts");
+  assert.equal(h.selectCallCount(), 0, "dangerously skip flag should not prompt for ordinary operations");
+
+  assertCatastrophicBlock(await h.toolCall("bash", { command: "rm -rf /" }), "dangerously skip catastrophic command");
+  assertProtectedPathBlock(await h.toolCall("bash", { command: "cat ~/.ssh/config" }), "dangerously skip protected bash");
+  assertProtectedPathBlock(await h.toolCall("write", { path: "~/.ssh/config" }), "dangerously skip protected write");
+  assert.equal(h.selectCallCount(), 0, "dangerously skip safety blocks should not prompt");
 }
 
 async function testSessionApprovalsDoNotBypassProtectedPaths() {
@@ -1010,6 +1094,7 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testPermissionsCommandListsStrict();
   await testStrictPromptsForOrdinaryReadTools();
   await testDefaultAllowsOrdinaryReadToolsWithoutPrompt();
+  await testDefaultPromptsForMissingFileReadInputs();
   await testDefaultAllowsSafeReadOnlyBashWithoutPrompt();
   await testDefaultPromptsForUnsafeBashSyntax();
   await testDefaultPromptsForWritesEditsAndMutatingBash();
@@ -1028,6 +1113,8 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testCustomModePolicyAppliesAfterSafetyPasses();
   await testCustomModeNetworkPolicyAppliesAfterSafetyPasses();
   await testAllowCatastrophicTrueReachesNormalModeHandling();
+  await testConfiguredCatastrophicPatternsBlockWhenNotAllowed();
+  await testDangerouslySkipPermissionsStillRunsAlwaysOnSafety();
   await testSessionApprovalsDoNotBypassProtectedPaths();
   await testSessionApprovalsStillWorkAfterSafetyPasses();
   await testSessionApprovalsClearOnModeChange();
