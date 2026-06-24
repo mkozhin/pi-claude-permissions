@@ -332,6 +332,11 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     "find . -type f",
     "find ~ -name config",
     "find / -name README.md",
+    "ls -Ra ~",
+    "ls -R /",
+    "eza -R ~",
+    "tree ~",
+    "du /",
     "rg token",
     "rg token .",
     "rg --hidden token .",
@@ -367,6 +372,7 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     "fd .",
     "fd -e ts",
     "tail -f README.md",
+    "tail -F README.md",
     "tail --follow README.md",
     "cat /dev/zero",
     "less README.md",
@@ -435,6 +441,8 @@ async function testDefaultPromptsForSensitiveDirectReads() {
     ["find", { path: ".aws" }],
     ["find", { path: ".", pattern: ".env" }],
     ["find", { path: ".", pattern: "*" }],
+    ["find", { path: "/", pattern: "config" }],
+    ["find", { path: "~", pattern: "config" }],
     ["find", { path: ".", name: "prod.secret.json" }],
     ["ls", { paths: ["README.md", "~/.ssh/config"] }],
     ["ls", { name: "credentials.json" }],
@@ -444,6 +452,8 @@ async function testDefaultPromptsForSensitiveDirectReads() {
     ["rg", { pattern: "needle", path: ".", glob: "*" }],
     ["fd", { pattern: "credentials" }],
     ["fd", { name: "id_rsa" }],
+    ["fd", { path: "/", pattern: "config" }],
+    ["fd", { path: "~", pattern: "config" }],
     ["bat", { file: ".npmrc" }],
     ["eza", { glob: "private-key.pem" }],
     ["eza", { name: "service.auth.json" }],
@@ -509,6 +519,9 @@ async function testDefaultPromptsForSensitiveBashReads() {
     "git config --get --file=.env foo.bar",
     "git config -f .env --get foo.bar",
     "git config --get --file .aws/credentials foo.bar",
+    "diff --from-file=.env README.md",
+    "diff --to-file=.env README.md",
+    "wc --files0-from=.env",
   ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "default");
@@ -517,6 +530,21 @@ async function testDefaultPromptsForSensitiveBashReads() {
     const result = await h.toolCall("bash", { command });
 
     assert.equal(h.selectCallCount(), 1, `default should prompt for sensitive bash read: ${command}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, "User denied bash");
+    assert.equal(h.lastSelectPrompt(), `🔒 bash: ${command}`);
+  }
+}
+
+async function testDefaultPromptsForImplicitSensitiveBashCwdReads() {
+  for (const command of ["ls", "eza"]) {
+    const h = await createHarness({ cwd: `${TEST_HOME}/workspace/credentials` });
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall("bash", { command });
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt for bash cwd read: ${command}`);
     assert.equal(result?.block, true);
     assert.equal(result?.reason, "User denied bash");
     assert.equal(h.lastSelectPrompt(), `🔒 bash: ${command}`);
@@ -588,6 +616,8 @@ async function testCatastrophicBashRunsBeforeAllowBranches() {
     { label: "plan critical rm path", mode: "plan", command: "rm -rf /" },
     { label: "custom policy critical rm path", mode: "customAllow", command: "rm -rf ~", localConfig: customModeConfig },
     { label: "bypass critical rm path", mode: "bypassPermissions", command: "sudo rm -rf /usr" },
+    { label: "bypass critical rm $HOME path", mode: "bypassPermissions", command: "rm -rf $HOME" },
+    { label: "bypass critical rm ${HOME} path", mode: "bypassPermissions", command: "rm -rf ${HOME}" },
     { label: "default critical rm path", mode: "default", command: "rm -rf /tmp" },
     { label: "strict critical rm path", mode: "strict", command: "rm -rf /var" },
   ]) {
@@ -643,6 +673,7 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "default bash question-glob protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.s?h/config" } },
     { label: "default bash negated-class protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.s[!x]h/config" } },
     { label: "default bash broad hidden-glob protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.*/*" } },
+    { label: "bypass bash command substitution protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ~/$(printf .ssh)/config" } },
   ]) {
     const h = await createHarness({
       localConfig: testCase.localConfig,
@@ -877,6 +908,7 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testDefaultPromptsForSensitiveDirectReads();
   await testDefaultPromptsForImplicitSensitiveCwdReads();
   await testDefaultPromptsForSensitiveBashReads();
+  await testDefaultPromptsForImplicitSensitiveBashCwdReads();
   await testDefaultAllowsOrdinaryDotPathReadsWithoutPrompt();
   await testDefaultAllowsWorkflowToolsWithoutPrompt();
   await testStrictPromptsForWorkflowTools();

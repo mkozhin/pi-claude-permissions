@@ -106,11 +106,14 @@ const SENSITIVE_GLOB_MATCH_SEGMENTS = [
   "private_key.pem", "id_rsa", "id_ed25519",
 ];
 const SEARCH_PATTERN_COMMANDS = new Set(["grep", "rg", "sed", "awk", "jq"]);
+const CWD_DEFAULTING_BASH_COMMANDS = new Set(["ls", "eza", "tree", "du", "find", "fd", "rg"]);
 const PATH_BEARING_BASH_OPTIONS = new Set([
   "-f", "-g",
   "--exclude", "--exclude-dir", "--file", "--from-file", "--glob", "--iglob", "--include",
 ]);
 const SHORT_PATH_BEARING_BASH_OPTIONS = new Set(["-f", "-g"]);
+const GENERIC_PATH_BEARING_BASH_OPTIONS = new Set(["--from-file", "--to-file", "--files0-from"]);
+const NO_SHORT_PATH_BEARING_BASH_OPTIONS = new Set<string>();
 const PATTERN_BEARING_BASH_OPTIONS = new Set(["-e", "--regexp", "--pattern", "--fixed-strings"]);
 const SHORT_PATTERN_BEARING_BASH_OPTIONS = new Set(["-e"]);
 const FIND_PREFIX_OPTIONS_WITH_VALUE = new Set(["-D"]);
@@ -906,6 +909,7 @@ function getDirectReadNamePatternInputs(toolName: string, input: Record<string, 
 
 function hasPotentialSensitiveDirectTraversal(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
   if (toolName === "find" || toolName === "fd") {
+    if (getDirectSearchRoots(input).some((path) => isBroadUnsafeDirectSearchRoot(path, ctx, home))) return true;
     return getDirectReadNamePatternInputs(toolName, input).length === 0;
   }
 
@@ -926,6 +930,19 @@ function hasSafeConstrainingSearchGlob(globs: string[], ctx: UiContext, home: st
     const trimmed = glob.trim();
     return trimmed.length > 0 && !trimmed.startsWith("!") && !isSensitiveReadPath(trimmed, ctx, home);
   });
+}
+
+function getDirectSearchRoots(input: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  for (const key of ["path", "paths"]) collectStringValues(input[key], paths);
+  return paths.length > 0 ? paths : ["."];
+}
+
+function isBroadUnsafeDirectSearchRoot(rawPath: string, ctx: UiContext, home: string): boolean {
+  const expanded = normalizeShellPathText(rawPath, home);
+  if (isBroadUnsafeSearchRoot(expanded)) return true;
+  const resolvedPath = resolveReadPath(expanded, ctx, home);
+  return resolvedPath === "/" || resolvedPath === home;
 }
 
 function isDirectoryLikeSearchPath(rawPath: string): boolean {
@@ -969,7 +986,11 @@ function getBashPathCandidates(segment: string, home: string): string[] {
   else if (SEARCH_PATTERN_COMMANDS.has(commandName)) parsedPathCandidates = getPatternThenPathCandidates(args);
   else parsedPathCandidates = getGenericPathCandidates(args);
 
-  return uniqueStrings([...rawPathCandidates, ...parsedPathCandidates]);
+  return uniqueStrings([
+    ...rawPathCandidates,
+    ...parsedPathCandidates,
+    ...(bashReadCommandDefaultsToCwd(commandName, args) ? ["."] : []),
+  ]);
 }
 
 function normalizeShellPathText(value: string, home: string): string {
@@ -1065,7 +1086,20 @@ function getShellExpansionVariants(token: string, assignments: Map<string, strin
     .replace(/\$[A-Za-z_][A-Za-z0-9_]*/g, "*");
   if (wildcardExpanded !== token) variants.add(wildcardExpanded);
 
+  const commandSubstitutionCollapsed = exactHomeExpanded
+    .replace(/\$\([^)]*(?:\)|$)/g, "*")
+    .replace(/`[^`]*(?:`|$)/g, "*");
+  if (commandSubstitutionCollapsed !== token) variants.add(commandSubstitutionCollapsed);
+
   return Array.from(variants);
+}
+
+function bashReadCommandDefaultsToCwd(commandName: string, args: string[]): boolean {
+  if (!CWD_DEFAULTING_BASH_COMMANDS.has(commandName)) return false;
+  if (commandName === "find") return getFindSearchRoots(args).length === 0;
+  if (commandName === "fd") return getFdPositionalArgs(args).length < 2;
+  if (commandName === "rg") return getPatternThenPathCandidates(args).length === 0;
+  return getPositionalArgs(args).length === 0;
 }
 
 function isPathExpansionCandidate(value: string): boolean {
@@ -1154,24 +1188,30 @@ function getAllPositionalPathCandidates(args: string[]): string[] {
   return paths;
 }
 
-function collectPathBearingOptionValue(args: string[], index: number, paths: string[]): { option: string; consumeNext: boolean } | undefined {
+function collectPathBearingOptionValue(
+  args: string[],
+  index: number,
+  paths: string[],
+  pathOptions = PATH_BEARING_BASH_OPTIONS,
+  shortPathOptions = SHORT_PATH_BEARING_BASH_OPTIONS,
+): { option: string; consumeNext: boolean } | undefined {
   const arg = args[index]!;
   if (!arg.startsWith("-") || arg === "--") return;
 
   const eqIndex = arg.indexOf("=");
   if (eqIndex > 0) {
     const option = arg.slice(0, eqIndex);
-    if (PATH_BEARING_BASH_OPTIONS.has(option)) paths.push(arg.slice(eqIndex + 1));
-    return PATH_BEARING_BASH_OPTIONS.has(option) ? { option, consumeNext: false } : undefined;
+    if (pathOptions.has(option)) paths.push(arg.slice(eqIndex + 1));
+    return pathOptions.has(option) ? { option, consumeNext: false } : undefined;
   }
 
   const shortOption = arg.slice(0, 2);
-  if (arg.length > 2 && SHORT_PATH_BEARING_BASH_OPTIONS.has(shortOption)) {
+  if (arg.length > 2 && shortPathOptions.has(shortOption)) {
     paths.push(arg.slice(2));
     return { option: shortOption, consumeNext: false };
   }
 
-  if (!PATH_BEARING_BASH_OPTIONS.has(arg)) return;
+  if (!pathOptions.has(arg)) return;
   const next = args[index + 1];
   if (next && next !== "--") {
     paths.push(next);
@@ -1339,7 +1379,28 @@ function collectGitConfigPathOptionValue(args: string[], index: number, paths: s
 }
 
 function getGenericPathCandidates(args: string[]): string[] {
-  return args.filter((arg) => arg !== "--" && !arg.startsWith("-"));
+  const paths: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--") {
+      paths.push(...args.slice(i + 1));
+      break;
+    }
+    const pathOption = collectPathBearingOptionValue(
+      args,
+      i,
+      paths,
+      GENERIC_PATH_BEARING_BASH_OPTIONS,
+      NO_SHORT_PATH_BEARING_BASH_OPTIONS,
+    );
+    if (pathOption) {
+      if (pathOption.consumeNext) i += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    paths.push(arg);
+  }
+  return paths;
 }
 
 function indexAfterPredicate(args: string[], index: number): number {
@@ -1568,9 +1629,11 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[]): boole
       || hasUnsafeDefaultFdTraversal(args);
   }
 
-  if (commandName === "tail") return hasShortFlag(args, "f") || hasOption(args, "--follow");
+  if (commandName === "ls" || commandName === "eza") return hasUnsafeDefaultListTraversal(args);
+  if (commandName === "du") return hasUnsafeDefaultDuTraversal(args);
+  if (commandName === "tail") return hasShortFlag(args, "f") || hasShortFlag(args, "F") || hasOption(args, "--follow");
   if (commandName === "less") return hasOption(args, "-o") || hasOption(args, "-O") || hasOption(args, "--log-file");
-  if (commandName === "tree") return hasOption(args, "-o") || hasOption(args, "--output");
+  if (commandName === "tree") return true;
   if (commandName === "sort") return hasOption(args, "-o") || hasOption(args, "--output");
   if (commandName === "diff") return hasOption(args, "--output");
   if (commandName === "rg") {
@@ -1629,7 +1692,32 @@ function getFindSearchRoots(args: string[]): string[] {
     if (beforeExpression) roots.push(arg);
   }
 
-  return roots.length > 0 ? roots : ["."];
+  return roots;
+}
+
+function hasUnsafeDefaultListTraversal(args: string[]): boolean {
+  return hasShortFlag(args, "R")
+    || hasOption(args, "--recursive")
+    || getPositionalArgs(args).some(isBroadUnsafeSearchRoot);
+}
+
+function hasUnsafeDefaultDuTraversal(args: string[]): boolean {
+  const paths = getPositionalArgs(args);
+  return paths.length === 0 || paths.some(isBroadUnsafeSearchRoot);
+}
+
+function getPositionalArgs(args: string[]): string[] {
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--") {
+      positional.push(...args.slice(i + 1));
+      break;
+    }
+    if (arg.startsWith("-")) continue;
+    positional.push(arg);
+  }
+  return positional;
 }
 
 function getFindConstrainingPatterns(args: string[]): string[] {
@@ -1679,8 +1767,11 @@ function isConcreteNonCatchallSearchPattern(value: string): boolean {
 }
 
 function isBroadUnsafeSearchRoot(value: string): boolean {
-  const normalized = value.trim();
-  return normalized === "/" || normalized === "~" || normalized === "$HOME" || normalized === "${HOME}";
+  const home = homedir();
+  const normalized = normalizeShellPathText(value.trim(), home);
+  if (normalized === "/" || normalized === "/*" || normalized === "~") return true;
+  const resolved = resolveAbsoluteShellTarget(normalized, home);
+  return resolved === "/" || resolved === home;
 }
 
 function hasGrepRecursiveDirectoryOption(args: string[]): boolean {
@@ -1800,19 +1891,21 @@ function rmRfPatterns() {
 }
 
 function resolveAbsoluteShellTarget(target: string, home = homedir()): string | null {
-  if (target === "~") return home;
-  if (target.startsWith("~/")) return resolve(home, target.slice(2));
-  if (target === "/*") return "/";
-  if (target.startsWith("/")) return target;
+  const normalized = normalizeShellPathText(target, home);
+  if (normalized === "~") return home;
+  if (normalized.startsWith("~/")) return resolve(home, normalized.slice(2));
+  if (normalized === "/*") return "/";
+  if (normalized.startsWith("/")) return resolve(normalized);
   return null;
 }
 
 function resolveShellTarget(target: string, cwd: string): string {
   const home = homedir();
-  if (target === "~") return home;
-  if (target.startsWith("~/")) return resolve(home, target.slice(2));
-  if (target.startsWith("/")) return resolve(target);
-  return resolve(cwd, target);
+  const normalized = normalizeShellPathText(target, home);
+  if (normalized === "~") return home;
+  if (normalized.startsWith("~/")) return resolve(home, normalized.slice(2));
+  if (normalized.startsWith("/")) return resolve(normalized);
+  return resolve(cwd, normalized);
 }
 
 function findMatch(command: string, patterns: Pattern[]): Pattern | undefined {
