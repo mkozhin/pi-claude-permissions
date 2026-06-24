@@ -332,6 +332,7 @@ async function testDefaultAllowsSafeReadOnlyBashWithoutPrompt() {
     "wc -l README.md",
     "jq . package.json",
     "bat README.md",
+    "bat --paging=never README.md",
     "eza .",
     "diff README.md package.json",
     "git status",
@@ -427,10 +428,17 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     "tail -F README.md",
     "tail --follow README.md",
     "cat /dev/zero",
+    "bat --pager=./pager README.md",
+    "bat --paging=always README.md",
+    "bat --paging=always --pager=./pager README.md",
+    "bat --config-file=.batconfig README.md",
     "less README.md",
     "more README.md",
     "rg --pre ./script token .",
     "diff --output=out.patch README.md package.json",
+    "wc --files0-from=paths.txt",
+    "sort --files0-from=paths.txt README.md",
+    "du --files0-from paths.txt",
   ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "default");
@@ -526,6 +534,7 @@ async function testDefaultPromptsForSensitiveDirectReads() {
 async function testDefaultPromptsForProtectedDirectReads() {
   for (const [toolName, input] of [
     ["read", { path: "~/.bashrc" }],
+    ["read", { path: "~//.bashrc" }],
     ["read", { path: "~/.profile" }],
     ["bat", { path: "~/.zshrc" }],
     ["ls", { paths: ["README.md", "~/.bashrc"] }],
@@ -763,11 +772,15 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "custom policy write allow path", mode: "customAllow", toolName: "write", inputForHome: (home) => ({ path: `${home}/.ssh/config` }), localConfig: customModeConfig },
     { label: "bypass write allow path", mode: "bypassPermissions", toolName: "write", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
     { label: "bypass write tilde protected path", mode: "bypassPermissions", toolName: "write", input: { path: "~/.ssh/config" } },
+    { label: "bypass write tilde double-slash protected path", mode: "bypassPermissions", toolName: "write", input: { path: "~//.ssh/config" } },
     { label: "bypass write relative protected cwd", mode: "bypassPermissions", toolName: "write", input: { path: "config" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "acceptEdits edit allow path", mode: "acceptEdits", toolName: "edit", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
+    { label: "acceptEdits edit tilde double-slash protected path", mode: "acceptEdits", toolName: "edit", input: { path: "~//.ssh/config" } },
     { label: "acceptEdits edit relative protected cwd", mode: "acceptEdits", toolName: "edit", input: { path: "config" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "default bash read allowlist path", mode: "default", toolName: "bash", input: { command: "cat ~/.ssh/config" } },
+    { label: "default bash tilde double-slash protected path", mode: "default", toolName: "bash", input: { command: "cat ~//.ssh/config" } },
     { label: "bypass bash named-user tilde protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ~alice/.ssh/config" } },
+    { label: "bypass bash named-user tilde double-slash protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ~alice//.ssh/config" } },
     { label: "bypass bash $HOME protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/.ssh/config" } },
     { label: "bypass bash normalized protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/.config/../.ssh/config" } },
     { label: "bypass bash complex HOME protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ${HOME:0:1}${HOME:1}/.ssh/config" } },
@@ -805,6 +818,8 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "bypass bash ANSI-C quoted protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/$'\\x2essh'/config" } },
     { label: "bypass git status protected cwd", mode: "bypassPermissions", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "default git status protected cwd", mode: "default", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
+    { label: "bypass root protected write descendant", mode: "bypassPermissions", toolName: "write", input: { path: "/tmp/config" }, localConfig: { protectedPaths: ["/"] } },
+    { label: "bypass root protected bash descendant", mode: "bypassPermissions", toolName: "bash", input: { command: "cat /tmp/config" }, localConfig: { protectedPaths: ["/"] } },
   ]) {
     const h = await createHarness({
       localConfig: testCase.localConfig,
@@ -833,6 +848,19 @@ async function testPlanModeRejectsChainedOrMutatingBashSegments() {
     "npm audit --fix",
     "sed -n w generated.txt README.md",
     "sed -n 'w out.txt' README.md",
+    "find . -delete",
+    "find . -exec rm {} \\;",
+    "find . -fprint out.txt",
+    "fd README . -x rm",
+    "fd README . --exec rm",
+    "sort -o out.txt README.md",
+    "tree -o out.txt .",
+    "less -o out.txt README.md",
+    "diff --output=out.patch README.md package.json",
+    "git diff --output=out.patch",
+    "bat --pager=./pager README.md",
+    "rg --pre ./script token .",
+    "cat /dev/zero",
   ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "plan");

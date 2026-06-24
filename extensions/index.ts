@@ -114,6 +114,7 @@ const PATH_BEARING_BASH_OPTIONS = new Set([
 ]);
 const SHORT_PATH_BEARING_BASH_OPTIONS = new Set(["-f", "-g"]);
 const GENERIC_PATH_BEARING_BASH_OPTIONS = new Set(["--from-file", "--to-file", "--files0-from"]);
+const INDIRECT_FILE_LIST_OPTIONS = new Set(["--files0-from", "--files-from"]);
 const NO_SHORT_PATH_BEARING_BASH_OPTIONS = new Set<string>();
 const FD_SEARCH_ROOT_OPTIONS = new Set(["--base-directory", "--search-path"]);
 const FILE_COMMAND_FILE_LIST_OPTIONS = new Set(["--files-from"]);
@@ -214,9 +215,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
   const sessionAllow: SessionAllow = { tools: new Set(), commands: new Set() };
   const dangerousPatterns = config.dangerousPatterns ?? DEFAULT_DANGEROUS;
   const catastrophicPatterns = config.catastrophicPatterns ?? DEFAULT_CATASTROPHIC;
-  const protectedPaths = (config.protectedPaths ?? DEFAULT_PROTECTED_PATHS).map((path) =>
-    path.startsWith("~/") ? resolve(home, path.slice(2)) : resolve(path),
-  );
+  const protectedPaths = (config.protectedPaths ?? DEFAULT_PROTECTED_PATHS).map((path) => resolveConfiguredPath(path, home));
   const allowCatastrophic = config.allowCatastrophic === true;
   const modes = buildModeDefinitions(config.customModes);
   const defaultMode = normalizeMode(config.defaultMode, DEFAULT_MODE, modes);
@@ -852,7 +851,13 @@ function findProtectedPathForInput(rawPath: string, ctx: UiContext, home: string
 }
 
 function findProtectedPathForResolvedPath(targetPath: string, protectedPaths: string[]): string | undefined {
-  return protectedPaths.find((path) => targetPath === path || targetPath.startsWith(path + "/"));
+  const normalizedTarget = resolve(targetPath);
+  return protectedPaths.find((path) => {
+    const normalizedPath = resolve(path);
+    if (normalizedTarget === normalizedPath) return true;
+    if (normalizedPath === "/") return normalizedTarget.startsWith("/");
+    return normalizedTarget.startsWith(`${normalizedPath}/`);
+  });
 }
 
 function findProtectedPathForGlobPattern(targetPath: string, protectedPaths: string[]): string | undefined {
@@ -1549,12 +1554,28 @@ function pathPatternMayReferencePath(patternPath: string, literalPath: string): 
 }
 
 function resolveReadPath(rawPath: string, ctx: UiContext, home: string): string {
-  if (rawPath === "~") return home;
-  if (rawPath.startsWith("~/")) return resolve(home, rawPath.slice(2));
-  const namedHome = rawPath.match(/^~[^/]+(?:\/(.*))?$/);
-  if (namedHome) return namedHome[1] ? resolve(home, namedHome[1]) : home;
+  const tildePath = resolveTildePath(rawPath, home);
+  if (tildePath !== undefined) return tildePath;
   if (rawPath.startsWith("/")) return resolve(rawPath);
   return resolve(ctx.cwd ?? process.cwd(), rawPath);
+}
+
+function resolveConfiguredPath(rawPath: string, home: string): string {
+  return resolveTildePath(rawPath, home) ?? resolve(rawPath);
+}
+
+function resolveTildePath(rawPath: string, home: string): string | undefined {
+  const currentHome = rawPath.match(/^~(?:\/+(.*))?$/);
+  if (currentHome) return currentHome[1] ? resolve(home, stripLeadingPathSeparators(currentHome[1])) : home;
+
+  const namedHome = rawPath.match(/^~[^/]+(?:\/+(.*))?$/);
+  if (namedHome) return namedHome[1] ? resolve(home, stripLeadingPathSeparators(namedHome[1])) : home;
+
+  return undefined;
+}
+
+function stripLeadingPathSeparators(value: string): string {
+  return value.replace(/^[\\/]+/, "");
 }
 
 function splitPathSegments(path: string): string[] {
@@ -1711,6 +1732,7 @@ function isSafeDefaultGitCommand(args: string[]): boolean {
 
 function hasUnsafeDefaultReadOptions(commandName: string, args: string[], ctx: UiContext, home: string): boolean {
   if (hasUnsafeSpecialDeviceRead(args)) return true;
+  if (hasPathBearingOption(args, INDIRECT_FILE_LIST_OPTIONS)) return true;
 
   if (commandName === "find") {
     return args.some((arg) => /^-(?:delete|exec(?:dir)?|ok(?:dir)?|fls|fprint0?|fprintf)$/.test(arg))
@@ -1744,11 +1766,31 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[], ctx: U
   if (commandName === "file") {
     return hasPathBearingOption(args, FILE_COMMAND_FILE_LIST_OPTIONS, FILE_COMMAND_SHORT_FILE_LIST_OPTIONS);
   }
+  if (commandName === "bat") return hasUnsafeBatOptions(args);
   if (commandName === "rg") {
     return hasOption(args, "--pre") || hasOption(args, "--hidden") || hasShortFlag(args, "u")
       || getRgGlobValues(args).some((glob) => glob.trim().startsWith("!"))
       || hasOption(args, "--files")
       || hasUnsafeDefaultRgTraversal(args);
+  }
+
+  return false;
+}
+
+function hasUnsafeBatOptions(args: string[]): boolean {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--pager" || arg.startsWith("--pager=")) return true;
+    if (arg === "--config-file" || arg.startsWith("--config-file=")) return true;
+
+    if (arg === "--paging") {
+      const value = args[i + 1];
+      if (value !== "never") return true;
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--paging=") && arg.slice("--paging=".length) !== "never") return true;
   }
 
   return false;
@@ -1999,6 +2041,8 @@ function hasUnsafePlanCommandOptions(segment: string): boolean {
   const commandName = getCommandName(tokens[commandIndex]!);
   const args = tokens.slice(commandIndex + 1);
 
+  if (hasUnsafeSpecialDeviceRead(args)) return true;
+
   if (commandName === "curl") {
     return hasOption(args, "-o")
       || hasOption(args, "--output")
@@ -2018,6 +2062,25 @@ function hasUnsafePlanCommandOptions(segment: string): boolean {
       || hasOption(args, "--in-place")
       || args.some((arg) => /(^|[;{\s])w(\s|$)/.test(arg));
   }
+
+  if (commandName === "find") {
+    return args.some((arg) => /^-(?:delete|exec(?:dir)?|ok(?:dir)?|fls|fprint0?|fprintf)$/.test(arg));
+  }
+
+  if (commandName === "fd") {
+    return args.some((arg) =>
+      arg === "-x" || arg === "-X" || arg === "--exec" || arg === "--exec-batch"
+      || arg.startsWith("--exec=") || arg.startsWith("--exec-batch="),
+    );
+  }
+
+  if (commandName === "less") return hasOption(args, "-o") || hasOption(args, "-O") || hasOption(args, "--log-file");
+  if (commandName === "tree") return hasOption(args, "-o");
+  if (commandName === "sort") return hasOption(args, "-o") || hasOption(args, "--output");
+  if (commandName === "diff") return hasOption(args, "--output");
+  if (commandName === "bat") return hasUnsafeBatOptions(args);
+  if (commandName === "rg") return hasOption(args, "--pre");
+  if (commandName === "git") return hasOption(args, "--output") || hasOption(args, "--ext-diff") || hasOption(args, "--textconv");
 
   return false;
 }
@@ -2106,8 +2169,8 @@ function resolveAbsoluteShellTarget(target: string, home = homedir()): string | 
   const normalized = normalizeShellPathText(target, home);
   const homeParameterTarget = resolveHomeParameterShellTarget(normalized, home);
   if (homeParameterTarget) return homeParameterTarget;
-  if (normalized === "~") return home;
-  if (normalized.startsWith("~/")) return resolve(home, normalized.slice(2));
+  const tildePath = resolveTildePath(normalized, home);
+  if (tildePath !== undefined) return tildePath;
   if (normalized === "/*") return "/";
   if (normalized.startsWith("/")) return resolve(normalized);
   return null;
@@ -2116,14 +2179,14 @@ function resolveAbsoluteShellTarget(target: string, home = homedir()): string | 
 function resolveHomeParameterShellTarget(target: string, home: string): string | null {
   const match = target.match(/^\$\{HOME(?:(?::[-=?+][^}]*)|(?:[-?+][^}]*)|(?:=[^}]*))?\}(?:\/(.*))?$/);
   if (!match) return null;
-  return match[1] ? resolve(home, match[1]) : home;
+  return match[1] ? resolve(home, stripLeadingPathSeparators(match[1])) : home;
 }
 
 function resolveShellTarget(target: string, cwd: string): string {
   const home = homedir();
   const normalized = normalizeShellPathText(target, home);
-  if (normalized === "~") return home;
-  if (normalized.startsWith("~/")) return resolve(home, normalized.slice(2));
+  const tildePath = resolveTildePath(normalized, home);
+  if (tildePath !== undefined) return tildePath;
   if (normalized.startsWith("/")) return resolve(normalized);
   return resolve(cwd, normalized);
 }
