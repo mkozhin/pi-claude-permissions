@@ -109,11 +109,13 @@ const SEARCH_PATTERN_COMMANDS = new Set(["grep", "rg", "sed", "awk", "jq"]);
 const CWD_DEFAULTING_BASH_COMMANDS = new Set(["ls", "eza", "tree", "du", "find", "fd", "rg"]);
 const PATH_BEARING_BASH_OPTIONS = new Set([
   "-f", "-g",
-  "--exclude", "--exclude-dir", "--file", "--from-file", "--glob", "--iglob", "--include",
+  "--base-directory", "--exclude", "--exclude-dir", "--exclude-from", "--file", "--from-file",
+  "--glob", "--iglob", "--ignore-file", "--include", "--search-path",
 ]);
 const SHORT_PATH_BEARING_BASH_OPTIONS = new Set(["-f", "-g"]);
 const GENERIC_PATH_BEARING_BASH_OPTIONS = new Set(["--from-file", "--to-file", "--files0-from"]);
 const NO_SHORT_PATH_BEARING_BASH_OPTIONS = new Set<string>();
+const FD_SEARCH_ROOT_OPTIONS = new Set(["--base-directory", "--search-path"]);
 const PATTERN_BEARING_BASH_OPTIONS = new Set(["-e", "--regexp", "--pattern", "--fixed-strings"]);
 const SHORT_PATTERN_BEARING_BASH_OPTIONS = new Set(["-e"]);
 const FIND_PREFIX_OPTIONS_WITH_VALUE = new Set(["-D"]);
@@ -857,7 +859,7 @@ function findProtectedPathForGlobPattern(targetPath: string, protectedPaths: str
 function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string, protectedPaths: string[]): boolean {
   if (toolName === "bash") {
     return findSensitiveBashReadPath(String(input.command ?? ""), ctx, home) === undefined
-      && isSafeDefaultReadCommand(String(input.command ?? ""));
+      && isSafeDefaultReadCommand(String(input.command ?? ""), ctx, home);
   }
   if (!DEFAULT_READ_TOOLS.has(toolName)) return false;
   return !hasSensitiveDirectReadPath(toolName, input, ctx, home)
@@ -1592,10 +1594,10 @@ function getFilenameStem(segment: string): string {
   return dotIndex >= 0 ? stemSource.slice(0, dotIndex) : stemSource;
 }
 
-function isSafeDefaultReadCommand(command: string): boolean {
+function isSafeDefaultReadCommand(command: string, ctx: UiContext, home: string): boolean {
   const stripped = stripAllowedStderrNullRedirects(command.trim());
   if (!stripped || hasUnsafeDefaultShellSyntax(stripped)) return false;
-  return stripped.split("|").every((segment) => isSafeDefaultReadCommandSegment(segment.trim()));
+  return stripped.split("|").every((segment) => isSafeDefaultReadCommandSegment(segment.trim(), ctx, home));
 }
 
 function stripAllowedStderrNullRedirects(command: string): string | undefined {
@@ -1615,7 +1617,7 @@ function hasUnsafeDefaultShellSyntax(command: string): boolean {
     || /\b(?:python|python3|node|ruby|perl|php|deno|bun)\s+-[ce]\b/i.test(command);
 }
 
-function isSafeDefaultReadCommandSegment(segment: string): boolean {
+function isSafeDefaultReadCommandSegment(segment: string, ctx: UiContext, home: string): boolean {
   const tokens = tokenizeShellLike(segment);
   const commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
   if (commandIndex < 0) return false;
@@ -1629,7 +1631,7 @@ function isSafeDefaultReadCommandSegment(segment: string): boolean {
 
   if (commandName === "git") return isSafeDefaultGitCommand(args);
   if (!DEFAULT_SAFE_BASH_COMMANDS.has(commandName)) return false;
-  return !hasUnsafeDefaultReadOptions(commandName, args);
+  return !hasUnsafeDefaultReadOptions(commandName, args, ctx, home);
 }
 
 function isPathQualifiedCommandToken(token: string): boolean {
@@ -1654,12 +1656,12 @@ function isSafeDefaultGitCommand(args: string[]): boolean {
   return false;
 }
 
-function hasUnsafeDefaultReadOptions(commandName: string, args: string[]): boolean {
+function hasUnsafeDefaultReadOptions(commandName: string, args: string[], ctx: UiContext, home: string): boolean {
   if (hasUnsafeSpecialDeviceRead(args)) return true;
 
   if (commandName === "find") {
     return args.some((arg) => /^-(?:delete|exec(?:dir)?|ok(?:dir)?|fls|fprint0?|fprintf)$/.test(arg))
-      || hasUnsafeDefaultFindTraversal(args);
+      || hasUnsafeDefaultFindTraversal(args, ctx, home);
   }
 
   if (commandName === "grep") {
@@ -1675,16 +1677,16 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[]): boole
     )
       || hasShortFlag(args, "H") || hasShortFlag(args, "I") || hasShortFlag(args, "u")
       || hasOption(args, "--hidden") || hasOption(args, "--no-ignore") || hasOption(args, "--unrestricted")
-      || hasUnsafeDefaultFdTraversal(args);
+      || hasUnsafeDefaultFdTraversal(args, ctx, home);
   }
 
   if (commandName === "ls" || commandName === "eza") return hasUnsafeDefaultListTraversal(args);
-  if (commandName === "du") return hasUnsafeDefaultDuTraversal(args);
+  if (commandName === "du") return hasUnsafeDefaultDuTraversal(args, ctx, home);
   if (commandName === "tail") return hasShortFlag(args, "f") || hasShortFlag(args, "F") || hasOption(args, "--follow");
   if (commandName === "less") return hasOption(args, "-o") || hasOption(args, "-O") || hasOption(args, "--log-file");
   if (commandName === "tree") return true;
   if (commandName === "sort") return hasOption(args, "-o") || hasOption(args, "--output");
-  if (commandName === "diff") return hasOption(args, "--output");
+  if (commandName === "diff") return hasOption(args, "--output") || hasUnsafeDefaultDiffTraversal(args, ctx, home);
   if (commandName === "rg") {
     return hasOption(args, "--pre") || hasOption(args, "--hidden") || hasShortFlag(args, "u")
       || getRgGlobValues(args).some((glob) => glob.trim().startsWith("!"))
@@ -1699,9 +1701,10 @@ function hasUnsafeSpecialDeviceRead(args: string[]): boolean {
   return args.some((arg) => /^\/dev\/(?:zero|u?random|full|[sh]d[a-z]|nvme\d+n\d+|disk\/)/.test(arg));
 }
 
-function hasUnsafeDefaultFindTraversal(args: string[]): boolean {
+function hasUnsafeDefaultFindTraversal(args: string[], ctx: UiContext, home: string): boolean {
   const roots = getFindSearchRoots(args);
-  if (roots.some(isBroadUnsafeSearchRoot)) return true;
+  const effectiveRoots = roots.length > 0 ? roots : ["."];
+  if (effectiveRoots.some((root) => isBroadUnsafeSearchRootForCwd(root, ctx, home))) return true;
   return !getFindConstrainingPatterns(args).some(isConcreteNonCatchallSearchPattern);
 }
 
@@ -1742,9 +1745,9 @@ function hasUnsafeDefaultListTraversal(args: string[]): boolean {
     || getPositionalArgs(args).some(isBroadUnsafeSearchRoot);
 }
 
-function hasUnsafeDefaultDuTraversal(args: string[]): boolean {
+function hasUnsafeDefaultDuTraversal(args: string[], ctx: UiContext, home: string): boolean {
   const paths = getPositionalArgs(args);
-  return paths.length === 0 || paths.some(isBroadUnsafeSearchRoot);
+  return paths.length === 0 || paths.some((path) => isBroadUnsafeSearchRootForCwd(path, ctx, home));
 }
 
 function getPositionalArgs(args: string[]): string[] {
@@ -1774,11 +1777,28 @@ function getFindConstrainingPatterns(args: string[]): string[] {
   return patterns;
 }
 
-function hasUnsafeDefaultFdTraversal(args: string[]): boolean {
+function hasUnsafeDefaultFdTraversal(args: string[], ctx: UiContext, home: string): boolean {
   const positional = getFdPositionalArgs(args);
   const pattern = positional[0];
   if (!pattern || !isConcreteNonCatchallSearchPattern(pattern)) return true;
-  return positional.slice(1).some(isBroadUnsafeSearchRoot);
+  const roots = getFdSearchRoots(args, positional);
+  const effectiveRoots = roots.length > 0 ? roots : ["."];
+  return effectiveRoots.some((root) => isBroadUnsafeSearchRootForCwd(root, ctx, home));
+}
+
+function getFdSearchRoots(args: string[], positional = getFdPositionalArgs(args)): string[] {
+  const roots = [...positional.slice(1)];
+  for (let i = 0; i < args.length; i += 1) {
+    const pathOption = collectPathBearingOptionValue(
+      args,
+      i,
+      roots,
+      FD_SEARCH_ROOT_OPTIONS,
+      NO_SHORT_PATH_BEARING_BASH_OPTIONS,
+    );
+    if (pathOption?.consumeNext) i += 1;
+  }
+  return roots;
 }
 
 function getFdPositionalArgs(args: string[]): string[] {
@@ -1813,6 +1833,19 @@ function isBroadUnsafeSearchRoot(value: string): boolean {
   if (normalized === "/" || normalized === "/*" || normalized === "~") return true;
   const resolved = resolveAbsoluteShellTarget(normalized, home);
   return resolved === "/" || resolved === home;
+}
+
+function isBroadUnsafeSearchRootForCwd(value: string, ctx: UiContext, home: string): boolean {
+  const normalized = normalizeShellPathText(value.trim(), home);
+  if (isBroadUnsafeSearchRoot(normalized)) return true;
+  const resolved = resolveReadPath(normalized, ctx, home);
+  return resolved === "/" || resolved === home;
+}
+
+function hasUnsafeDefaultDiffTraversal(args: string[], ctx: UiContext, home: string): boolean {
+  return hasShortFlag(args, "r")
+    || hasOption(args, "--recursive")
+    || getPositionalArgs(args).some((path) => isBroadUnsafeSearchRootForCwd(path, ctx, home));
 }
 
 function hasGrepRecursiveDirectoryOption(args: string[]): boolean {

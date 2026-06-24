@@ -308,6 +308,7 @@ async function testDefaultAllowsSafeReadOnlyBashWithoutPrompt() {
     "jq . package.json",
     "bat README.md",
     "eza .",
+    "diff README.md package.json",
     "git status",
     "git branch --show-current",
     "git branch --all",
@@ -359,6 +360,8 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     "git diff --output=out.patch",
     "git log --output=out.patch",
     "git show --output=out.patch HEAD",
+    "diff -r . /tmp/snapshot",
+    "diff --recursive README.md package.json",
     "git diff",
     "git diff .env",
     "git log",
@@ -542,13 +545,18 @@ async function testDefaultPromptsForSensitiveBashReads() {
     "cat .env.local",
     "cat *.env",
     "grep token .ssh/config",
+    "grep needle README.md --exclude-from=.ssh/config",
     "grep --regexp=token .env",
     "grep --file patterns.txt .env",
     "rg -g .env token README.md",
+    "rg needle README.md --ignore-file=.ssh/config",
     "rg --regexp=token credentials.json",
     "find . -name .env",
     "find . -path .aws -type f",
     "fd config .kube",
+    "fd README --search-path=.ssh",
+    "fd README --base-directory=.ssh",
+    "fd README --ignore-file=.ssh/config",
     "fd credentials .",
     "fd .env .",
     "jq . auth.json",
@@ -583,6 +591,28 @@ async function testDefaultPromptsForImplicitSensitiveBashCwdReads() {
     const result = await h.toolCall("bash", { command });
 
     assert.equal(h.selectCallCount(), 1, `default should prompt for bash cwd read: ${command}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, "User denied bash");
+    assert.equal(h.lastSelectPrompt(), `🔒 bash: ${command}`);
+  }
+}
+
+async function testDefaultPromptsForBroadHomeBashTraversal() {
+  for (const command of [
+    "find . -name config",
+    "find -name config",
+    "du .",
+    "fd README",
+    "fd README .",
+    "fd README --search-path=.",
+  ]) {
+    const h = await createHarness({ cwd: TEST_HOME });
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall("bash", { command });
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt for broad home traversal: ${command}`);
     assert.equal(result?.block, true);
     assert.equal(result?.reason, "User denied bash");
     assert.equal(h.lastSelectPrompt(), `🔒 bash: ${command}`);
@@ -699,7 +729,12 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "bypass bash normalized protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/.config/../.ssh/config" } },
     { label: "bypass bash complex HOME protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ${HOME:0:1}${HOME:1}/.ssh/config" } },
     { label: "bypass grep regexp protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "grep --regexp=token ~/.ssh/config" } },
+    { label: "bypass grep exclude-from protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "grep needle README.md --exclude-from=.ssh/config" }, cwdForHome: (home) => home },
+    { label: "bypass rg ignore-file protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "rg needle README.md --ignore-file=.ssh/config" }, cwdForHome: (home) => home },
     { label: "bypass rg files protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "rg --files ~/.ssh" } },
+    { label: "bypass fd search-path protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README --search-path=.ssh" }, cwdForHome: (home) => home },
+    { label: "bypass fd base-directory protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README --base-directory=.ssh" }, cwdForHome: (home) => home },
+    { label: "bypass fd ignore-file protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README --ignore-file=.ssh/config" }, cwdForHome: (home) => home },
     { label: "bypass find option protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "find -L ~/.ssh -type f" } },
     { label: "bypass find predicate protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "find ~ -path ~/.ssh -type f" } },
     { label: "bypass ssh attached config protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "ssh -F~/.ssh/config host" } },
@@ -983,6 +1018,7 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testDefaultPromptsForImplicitSensitiveCwdReads();
   await testDefaultPromptsForSensitiveBashReads();
   await testDefaultPromptsForImplicitSensitiveBashCwdReads();
+  await testDefaultPromptsForBroadHomeBashTraversal();
   await testDefaultAllowsOrdinaryDotPathReadsWithoutPrompt();
   await testDefaultAllowsWorkflowToolsWithoutPrompt();
   await testStrictPromptsForWorkflowTools();
