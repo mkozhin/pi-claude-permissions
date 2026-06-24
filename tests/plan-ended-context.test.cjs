@@ -490,6 +490,38 @@ async function testDefaultPromptsForSensitiveDirectReads() {
   }
 }
 
+async function testDefaultPromptsForProtectedDirectReads() {
+  for (const [toolName, input] of [
+    ["read", { path: "~/.bashrc" }],
+    ["read", { path: "~/.profile" }],
+    ["bat", { path: "~/.zshrc" }],
+    ["ls", { paths: ["README.md", "~/.bashrc"] }],
+  ]) {
+    const h = await createHarness();
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall(toolName, input);
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt for protected ${toolName} input: ${JSON.stringify(input)}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, `User denied ${toolName}`);
+    assert.match(h.lastSelectPrompt(), new RegExp(`^🔒 ${toolName}: `));
+  }
+
+  const customProtected = await createHarness({
+    localConfig: { protectedPaths: ["~/workspace/protected"] },
+  });
+  customProtected.setFlag("permission-mode", "default");
+  await customProtected.sessionStart();
+
+  const customResult = await customProtected.toolCall("read", { path: "~/workspace/protected/config.json" });
+
+  assert.equal(customProtected.selectCallCount(), 1, "default should prompt for configured protected read path");
+  assert.equal(customResult?.block, true);
+  assert.equal(customResult?.reason, "User denied read");
+}
+
 async function testDefaultPromptsForImplicitSensitiveCwdReads() {
   for (const toolName of ["read", "grep", "find", "ls", "rg", "fd", "bat", "eza"]) {
     const h = await createHarness({ cwd: `${TEST_HOME}/.ssh` });
@@ -543,7 +575,7 @@ async function testDefaultPromptsForSensitiveBashReads() {
 }
 
 async function testDefaultPromptsForImplicitSensitiveBashCwdReads() {
-  for (const command of ["ls", "eza"]) {
+  for (const command of ["ls", "eza", "git status"]) {
     const h = await createHarness({ cwd: `${TEST_HOME}/workspace/credentials` });
     h.setFlag("permission-mode", "default");
     await h.sessionStart();
@@ -625,6 +657,8 @@ async function testCatastrophicBashRunsBeforeAllowBranches() {
     { label: "bypass critical rm $HOME path", mode: "bypassPermissions", command: "rm -rf $HOME" },
     { label: "bypass critical rm ${HOME} path", mode: "bypassPermissions", command: "rm -rf ${HOME}" },
     { label: "bypass critical rm ${HOME:?} path", mode: "bypassPermissions", command: "rm -rf ${HOME:?}" },
+    { label: "bypass critical rm semicolon separator path", mode: "bypassPermissions", command: "rm -rf /tmp; echo ok" },
+    { label: "bypass critical rm pipe separator path", mode: "bypassPermissions", command: "rm -rf /tmp|cat" },
     { label: "default critical rm path", mode: "default", command: "rm -rf /tmp" },
     { label: "strict critical rm path", mode: "strict", command: "rm -rf /var" },
   ]) {
@@ -660,6 +694,7 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "acceptEdits edit allow path", mode: "acceptEdits", toolName: "edit", inputForHome: (home) => ({ path: `${home}/.ssh/config` }) },
     { label: "acceptEdits edit relative protected cwd", mode: "acceptEdits", toolName: "edit", input: { path: "config" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "default bash read allowlist path", mode: "default", toolName: "bash", input: { command: "cat ~/.ssh/config" } },
+    { label: "bypass bash named-user tilde protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ~alice/.ssh/config" } },
     { label: "bypass bash $HOME protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/.ssh/config" } },
     { label: "bypass bash normalized protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/.config/../.ssh/config" } },
     { label: "bypass bash complex HOME protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ${HOME:0:1}${HOME:1}/.ssh/config" } },
@@ -681,6 +716,8 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "default bash negated-class protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.s[!x]h/config" } },
     { label: "default bash broad hidden-glob protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.*/*" } },
     { label: "bypass bash command substitution protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ~/$(printf .ssh)/config" } },
+    { label: "bypass git status protected cwd", mode: "bypassPermissions", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
+    { label: "default git status protected cwd", mode: "default", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
   ]) {
     const h = await createHarness({
       localConfig: testCase.localConfig,
@@ -695,6 +732,32 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     assertProtectedPathBlock(result, testCase.label);
     assert.equal(h.selectCallCount(), 0, `${testCase.label} should not prompt before protected-path block`);
   }
+}
+
+async function testPlanModeRejectsChainedOrMutatingBashSegments() {
+  for (const command of [
+    "cat README.md && touch generated.txt",
+    "cat README.md || touch generated.txt",
+    "cat README.md; rm -rf ./generated",
+    "cat README.md & touch generated.txt",
+    "cat README.md | touch generated.txt",
+  ]) {
+    const h = await createHarness();
+    h.setFlag("permission-mode", "plan");
+    await h.sessionStart();
+
+    const result = await h.toolCall("bash", { command });
+
+    assert.equal(result?.block, true, `plan mode should reject unsafe bash: ${command}`);
+    assert.match(result?.reason, /plan mode/i);
+    assert.equal(h.selectCallCount(), 0, "plan-mode bash rejection should not invoke confirmation UI");
+  }
+
+  const h = await createHarness();
+  h.setFlag("permission-mode", "plan");
+  await h.sessionStart();
+
+  assert.equal(await h.toolCall("bash", { command: "cat README.md | grep pi" }), undefined, "plan mode should allow safe read-only pipelines");
 }
 
 async function testCustomModePolicyAppliesAfterSafetyPasses() {
@@ -916,6 +979,7 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testDefaultPromptsForUnsafeBashSyntax();
   await testDefaultPromptsForWritesEditsAndMutatingBash();
   await testDefaultPromptsForSensitiveDirectReads();
+  await testDefaultPromptsForProtectedDirectReads();
   await testDefaultPromptsForImplicitSensitiveCwdReads();
   await testDefaultPromptsForSensitiveBashReads();
   await testDefaultPromptsForImplicitSensitiveBashCwdReads();
@@ -924,6 +988,7 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testStrictPromptsForWorkflowTools();
   await testCatastrophicBashRunsBeforeAllowBranches();
   await testProtectedPathsRunBeforeAllowAndDenyBranches();
+  await testPlanModeRejectsChainedOrMutatingBashSegments();
   await testCustomModePolicyAppliesAfterSafetyPasses();
   await testCustomModeNetworkPolicyAppliesAfterSafetyPasses();
   await testAllowCatastrophicTrueReachesNormalModeHandling();
