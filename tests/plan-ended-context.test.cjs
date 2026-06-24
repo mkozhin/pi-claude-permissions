@@ -299,7 +299,7 @@ async function testDefaultAllowsSafeReadOnlyBashWithoutPrompt() {
     "ls",
     "grep strict README.md",
     "grep rm README.md",
-    "rg touch .",
+    "rg touch README.md",
     "cat README.md",
     "git status",
     "git branch --show-current",
@@ -324,7 +324,15 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     "less -o out.txt README.md",
     "tree -o out.txt .",
     "grep -R token .",
+    "grep -d recurse token .",
+    "grep --directories=recurse token .",
+    "grep --directories recurse token .",
+    "grep -drecurse token .",
+    "rg token",
+    "rg token .",
     "rg --hidden token .",
+    "rg --files .",
+    "rg -g !*.env token",
     "git diff --output=out.patch",
     "git log --output=out.patch",
     "git show --output=out.patch HEAD",
@@ -348,6 +356,9 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     "npm install left-pad",
     "python -c 'print(1)'",
     "fd -x rm",
+    "fd -H README.md .",
+    "fd -I README.md .",
+    "fd -u README.md .",
     "rg --pre ./script token .",
     "diff --output=out.patch README.md package.json",
   ]) {
@@ -369,6 +380,8 @@ async function testDefaultPromptsForWritesEditsAndMutatingBash() {
     ["write", { path: "generated.txt" }],
     ["edit", { path: "README.md" }],
     ["bash", { command: "touch generated.txt" }],
+    ["mcp", { server: "unlisted", tool: "call" }],
+    ["browser", { action: "navigate" }],
   ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "default");
@@ -406,6 +419,7 @@ async function testDefaultPromptsForSensitiveDirectReads() {
     ["read", { path: "auth.json" }],
     ["grep", { pattern: "needle", path: ".env" }],
     ["grep", { pattern: "needle", path: "." }],
+    ["grep", { pattern: "needle", path: ".", glob: "!*.env" }],
     ["find", { path: ".aws" }],
     ["find", { path: ".", pattern: ".env" }],
     ["find", { path: ".", pattern: "*" }],
@@ -414,6 +428,8 @@ async function testDefaultPromptsForSensitiveDirectReads() {
     ["ls", { name: "credentials.json" }],
     ["rg", { pattern: "needle", files: ["README.md", "credentials.json"] }],
     ["rg", { pattern: "needle", path: "." }],
+    ["rg", { pattern: "needle", path: ".", glob: "!*.env" }],
+    ["rg", { pattern: "needle", path: ".", glob: "*" }],
     ["fd", { pattern: "credentials" }],
     ["fd", { name: "id_rsa" }],
     ["bat", { file: ".npmrc" }],
@@ -466,6 +482,8 @@ async function testDefaultPromptsForSensitiveBashReads() {
     "find . -name .env",
     "find . -path .aws -type f",
     "fd config .kube",
+    "fd credentials .",
+    "fd .env .",
     "sed -n p .env",
     "awk pattern credentials.json",
     "jq . auth.json",
@@ -599,6 +617,8 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "bypass git global protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "git --git-dir=~/.ssh status" } },
     { label: "bypass git relative global protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "git --git-dir=.ssh status" }, cwdForHome: (home) => home },
     { label: "bypass git assignment protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "GIT_DIR=.ssh git status" }, cwdForHome: (home) => home },
+    { label: "bypass bash HOME substring expansion protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ${HOME:0:999}/.ssh/config" } },
+    { label: "bypass bash assigned shell variable protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "D=.ssh cat ~/$D/config" } },
     { label: "strict bash ${HOME} protected path", mode: "strict", toolName: "bash", input: { command: "cat ${HOME}/.ssh/config" } },
     { label: "default bash quoted protected path", mode: "default", toolName: "bash", input: { command: "cat ~/\".ssh\"/config" } },
     { label: "default bash glob protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.s[s]h/config" } },
@@ -618,6 +638,73 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
 
     assertProtectedPathBlock(result, testCase.label);
     assert.equal(h.selectCallCount(), 0, `${testCase.label} should not prompt before protected-path block`);
+  }
+}
+
+async function testCustomModePolicyAppliesAfterSafetyPasses() {
+  const customModeConfig = {
+    customModes: [{
+      id: "customPolicy",
+      label: "Custom Policy",
+      status: "C",
+      policy: {
+        allowedWriteRoots: ["cwd"],
+        blockedBashPatterns: [{ pattern: "forbidden", description: "blocked by custom policy" }],
+      },
+    }],
+  };
+
+  const h = await createHarness({ localConfig: customModeConfig });
+  h.setFlag("permission-mode", "customPolicy");
+  await h.sessionStart();
+
+  assert.equal(await h.toolCall("write", { path: "generated.txt" }), undefined, "custom mode should allow writes inside cwd");
+
+  let result = await h.toolCall("write", { path: "../outside.txt" });
+  assert.equal(result?.block, true, "custom mode should block writes outside allowed roots");
+  assert.match(result?.reason, /outside allowed roots/);
+
+  result = await h.toolCall("bash", { command: "echo forbidden" });
+  assert.equal(result?.block, true, "custom mode should apply blocked bash patterns");
+  assert.equal(result?.reason, "blocked by custom policy");
+}
+
+async function testCustomModeNetworkPolicyAppliesAfterSafetyPasses() {
+  const customModeConfig = {
+    customModes: [{
+      id: "networkPolicy",
+      label: "Network Policy",
+      status: "N",
+      policy: {
+        network: { allowLocalhostOnly: true, allowedPorts: [3000] },
+      },
+    }],
+  };
+
+  const h = await createHarness({ localConfig: customModeConfig });
+  h.setFlag("permission-mode", "networkPolicy");
+  await h.sessionStart();
+
+  assert.equal(await h.toolCall("bash", { command: "curl http://localhost:3000/health" }), undefined, "custom mode should allow configured localhost network access");
+
+  const result = await h.toolCall("bash", { command: "curl https://example.com" });
+  assert.equal(result?.block, true, "custom mode should block external network access");
+  assert.match(result?.reason, /Network/);
+}
+
+async function testAllowCatastrophicTrueReachesNormalModeHandling() {
+  for (const [label, options] of [
+    ["local settings", { localSettings: { piClaudePermissions: { allowCatastrophic: true } } }],
+    ["global settings", { globalSettings: { piClaudePermissions: { allowCatastrophic: true } } }],
+  ]) {
+    const h = await createHarness(options);
+    h.setFlag("permission-mode", "bypassPermissions");
+    await h.sessionStart();
+
+    assert.equal(await h.toolCall("bash", { command: "rm -rf /tmp" }), undefined, `${label} allowCatastrophic should let catastrophic commands reach bypass handling`);
+
+    const protectedResult = await h.toolCall("bash", { command: "rm -rf ~/.ssh" });
+    assertProtectedPathBlock(protectedResult, `${label} allowCatastrophic protected path`);
   }
 }
 
@@ -653,6 +740,11 @@ async function testSessionApprovalsStillWorkAfterSafetyPasses() {
   assert.equal(await defaultCommand.toolCall("bash", { command: "touch generated.txt" }), undefined);
   assert.equal(defaultCommand.selectCallCount(), 1, "default command session approval should suppress second prompt");
 
+  const differentDefaultCommand = await defaultCommand.toolCall("bash", { command: "touch another-generated.txt" });
+  assert.equal(defaultCommand.selectCallCount(), 2, "different default bash command should prompt again");
+  assert.equal(differentDefaultCommand?.block, true);
+  assert.equal(differentDefaultCommand?.reason, "User denied bash");
+
   const strictTool = await createHarness({ selectResponses: [1] });
   strictTool.setFlag("permission-mode", "strict");
   await strictTool.sessionStart();
@@ -668,6 +760,26 @@ async function testSessionApprovalsStillWorkAfterSafetyPasses() {
   assert.equal(await strictCommand.toolCall("bash", { command: "touch strict-generated.txt" }), undefined);
   assert.equal(await strictCommand.toolCall("bash", { command: "touch strict-generated.txt" }), undefined);
   assert.equal(strictCommand.selectCallCount(), 1, "strict command session approval should suppress second prompt");
+}
+
+async function testSessionApprovalsClearOnModeChange() {
+  const h = await createHarness({ selectResponses: [1] });
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  assert.equal(await h.toolCall("write", { path: "generated.txt" }), undefined);
+  assert.equal(h.selectCallCount(), 1, "initial write should prompt once");
+
+  await h.shiftTab(); // default -> plan
+  await h.shiftTab(); // plan -> acceptEdits
+  await h.shiftTab(); // acceptEdits -> bypassPermissions
+  await h.shiftTab(); // bypassPermissions -> strict
+
+  const result = await h.toolCall("write", { path: "generated.txt" });
+
+  assert.equal(h.selectCallCount(), 2, "write session approval should not survive mode changes");
+  assert.equal(result?.block, true);
+  assert.equal(result?.reason, "User denied write");
 }
 
 async function testPromptRequiredCallsBlockWithoutUi() {
@@ -686,6 +798,24 @@ async function testPromptRequiredCallsBlockWithoutUi() {
     assert.equal(result?.block, true);
     assert.match(result?.reason, /no UI for confirmation/);
   }
+}
+
+async function testDefaultPreapprovedCallsRunWithoutUi() {
+  const h = await createHarness({ hasUI: false });
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  for (const [toolName, input] of [
+    ["read", { path: "README.md" }],
+    ["bash", { command: "ls" }],
+    ["manage_todo_list", { operation: "test" }],
+    ["ask_user", { question: "Continue?" }],
+  ]) {
+    const result = await h.toolCall(toolName, input);
+    assert.equal(result, undefined, `default should allow preapproved ${toolName} without UI`);
+  }
+
+  assert.equal(h.selectCallCount(), 0, "preapproved no-UI calls should not invoke confirmation UI");
 }
 
 async function testCyclingThroughPlanDoesNotInjectEndedContext() {
@@ -734,9 +864,14 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testStrictPromptsForWorkflowTools();
   await testCatastrophicBashRunsBeforeAllowBranches();
   await testProtectedPathsRunBeforeAllowAndDenyBranches();
+  await testCustomModePolicyAppliesAfterSafetyPasses();
+  await testCustomModeNetworkPolicyAppliesAfterSafetyPasses();
+  await testAllowCatastrophicTrueReachesNormalModeHandling();
   await testSessionApprovalsDoNotBypassProtectedPaths();
   await testSessionApprovalsStillWorkAfterSafetyPasses();
+  await testSessionApprovalsClearOnModeChange();
   await testPromptRequiredCallsBlockWithoutUi();
+  await testDefaultPreapprovedCallsRunWithoutUi();
   await testCyclingThroughPlanDoesNotInjectEndedContext();
   await testLeavingAfterPlanTurnInjectsEndedContext();
   console.log("plan-ended-context tests passed");

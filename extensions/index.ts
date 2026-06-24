@@ -811,7 +811,7 @@ function isSessionAllowed(toolName: string, input: Record<string, unknown>, sess
 
 function findProtectedBashPath(command: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
   for (const segment of splitShellCommandSegments(normalizeShellPathText(command, home))) {
-    for (const candidate of getBashPathCandidates(segment)) {
+    for (const candidate of getBashPathCandidates(segment, home)) {
       const protectedPath = findProtectedPathForInput(candidate, ctx, home, protectedPaths);
       if (protectedPath) return protectedPath;
     }
@@ -866,7 +866,7 @@ function hasSensitiveDirectReadPath(toolName: string, input: Record<string, unkn
     if (isSensitiveReadPath(path, ctx, home)) return true;
   }
 
-  if (hasPotentialSensitiveDirectTraversal(toolName, input)) return true;
+  if (hasPotentialSensitiveDirectTraversal(toolName, input, ctx, home)) return true;
 
   return false;
 }
@@ -896,7 +896,7 @@ function getDirectReadNamePatternInputs(toolName: string, input: Record<string, 
   return patterns;
 }
 
-function hasPotentialSensitiveDirectTraversal(toolName: string, input: Record<string, unknown>): boolean {
+function hasPotentialSensitiveDirectTraversal(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string): boolean {
   if (toolName === "find" || toolName === "fd") {
     return getDirectReadNamePatternInputs(toolName, input).length === 0;
   }
@@ -905,12 +905,19 @@ function hasPotentialSensitiveDirectTraversal(toolName: string, input: Record<st
 
   const globs: string[] = [];
   collectStringValues(input.glob, globs);
-  if (globs.length > 0) return false;
 
   const paths: string[] = [];
   for (const key of ["path", "paths", "file", "files"]) collectStringValues(input[key], paths);
   const searchPaths = paths.length > 0 ? paths : ["."];
-  return searchPaths.some(isDirectoryLikeSearchPath);
+  if (!searchPaths.some(isDirectoryLikeSearchPath)) return false;
+  return !hasSafeConstrainingSearchGlob(globs, ctx, home);
+}
+
+function hasSafeConstrainingSearchGlob(globs: string[], ctx: UiContext, home: string): boolean {
+  return globs.some((glob) => {
+    const trimmed = glob.trim();
+    return trimmed.length > 0 && !trimmed.startsWith("!") && !isSensitiveReadPath(trimmed, ctx, home);
+  });
 }
 
 function isDirectoryLikeSearchPath(rawPath: string): boolean {
@@ -925,18 +932,21 @@ function isDirectoryLikeSearchPath(rawPath: string): boolean {
 
 function findSensitiveBashReadPath(command: string, ctx: UiContext, home: string): string | undefined {
   for (const segment of splitShellCommandSegments(normalizeShellPathText(command, home))) {
-    for (const candidate of getBashPathCandidates(segment)) {
+    for (const candidate of getBashPathCandidates(segment, home)) {
       if (isSensitiveReadPath(candidate, ctx, home)) return candidate;
     }
   }
 }
 
-function getBashPathCandidates(segment: string): string[] {
+function getBashPathCandidates(segment: string, home: string): string[] {
   const tokens = tokenizeShellLike(segment).map(cleanShellToken).filter((token): token is string => token !== undefined);
   const commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
+  const assignmentTokens = commandIndex < 0 ? tokens : tokens.slice(0, commandIndex);
+  const assignments = getShellAssignments(assignmentTokens);
   const rawPathCandidates = uniqueStrings([
     ...getShellPathReferenceCandidates(tokens),
-    ...getShellAssignmentPathCandidates(commandIndex < 0 ? tokens : tokens.slice(0, commandIndex)),
+    ...getShellAssignmentPathCandidates(assignmentTokens),
+    ...getShellExpansionPathCandidates(tokens, assignments, home),
   ]);
   if (commandIndex < 0) return rawPathCandidates;
 
@@ -946,7 +956,7 @@ function getBashPathCandidates(segment: string): string[] {
 
   if (commandName === "git") parsedPathCandidates = getGitPathCandidates(args);
   else if (commandName === "find") parsedPathCandidates = getFindPathCandidates(args);
-  else if (commandName === "fd") parsedPathCandidates = getPatternThenPathCandidates(args);
+  else if (commandName === "fd") parsedPathCandidates = getFdPathCandidates(args);
   else if (commandName === "rg" && hasOption(args, "--files")) parsedPathCandidates = getAllPositionalPathCandidates(args);
   else if (SEARCH_PATTERN_COMMANDS.has(commandName)) parsedPathCandidates = getPatternThenPathCandidates(args);
   else parsedPathCandidates = getGenericPathCandidates(args);
@@ -999,6 +1009,56 @@ function getShellAssignmentPathCandidates(tokens: string[]): string[] {
   return uniqueStrings(paths);
 }
 
+function getShellAssignments(tokens: string[]): Map<string, string> {
+  const assignments = new Map<string, string>();
+  for (const token of tokens) {
+    const eqIndex = token.indexOf("=");
+    if (eqIndex <= 0) continue;
+    const name = token.slice(0, eqIndex);
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) assignments.set(name, token.slice(eqIndex + 1));
+  }
+  return assignments;
+}
+
+function getShellExpansionPathCandidates(tokens: string[], assignments: Map<string, string>, home: string): string[] {
+  const candidates: string[] = [];
+  for (const token of tokens) {
+    if (!token.includes("$")) continue;
+    for (const variant of getShellExpansionVariants(token, assignments, home)) {
+      if (isPathExpansionCandidate(variant)) candidates.push(variant);
+    }
+  }
+  return uniqueStrings(candidates);
+}
+
+function getShellExpansionVariants(token: string, assignments: Map<string, string>, home: string): string[] {
+  const variants = new Set<string>();
+  const homeExpanded = token
+    .replace(/\$\{HOME[^}]*\}/g, home)
+    .replace(/\$HOME\b/g, home);
+  if (homeExpanded !== token) variants.add(homeExpanded);
+
+  let assignedExpanded = homeExpanded;
+  for (const [name, value] of assignments) {
+    const escapedName = escapeRegExp(name);
+    assignedExpanded = assignedExpanded
+      .replace(new RegExp(`\\$\\{${escapedName}\\}`, "g"), value)
+      .replace(new RegExp(`\\$${escapedName}\\b`, "g"), value);
+  }
+  if (assignedExpanded !== token) variants.add(assignedExpanded);
+
+  const wildcardExpanded = homeExpanded
+    .replace(/\$\{[A-Za-z_][A-Za-z0-9_]*(?::[^}]*)?\}/g, "*")
+    .replace(/\$[A-Za-z_][A-Za-z0-9_]*/g, "*");
+  if (wildcardExpanded !== token) variants.add(wildcardExpanded);
+
+  return Array.from(variants);
+}
+
+function isPathExpansionCandidate(value: string): boolean {
+  return value.includes("/") || value.startsWith("~") || value.startsWith(".");
+}
+
 function isPathLikeAssignmentName(name: string): boolean {
   return /(?:^|_)(?:PATH|DIR|FILE|HOME|ROOT|CONFIG|KEY)$/i.test(name);
 }
@@ -1036,6 +1096,24 @@ function getPatternThenPathCandidates(args: string[]): string[] {
       sawPattern = true;
       continue;
     }
+    paths.push(arg);
+  }
+
+  return paths;
+}
+
+function getFdPathCandidates(args: string[]): string[] {
+  const paths: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--") continue;
+    const pathOption = collectPathBearingOptionValue(args, i, paths);
+    if (pathOption) {
+      if (pathOption.consumeNext) i += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
     paths.push(arg);
   }
 
@@ -1418,23 +1496,66 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[]): boole
 
   if (commandName === "grep") {
     return hasShortFlag(args, "R") || hasShortFlag(args, "r")
-      || hasOption(args, "--recursive") || hasOption(args, "--dereference-recursive");
+      || hasOption(args, "--recursive") || hasOption(args, "--dereference-recursive")
+      || hasGrepRecursiveDirectoryOption(args);
   }
 
   if (commandName === "fd") {
     return args.some((arg) =>
       arg === "-x" || arg === "-X" || arg === "--exec" || arg === "--exec-batch"
       || arg.startsWith("--exec=") || arg.startsWith("--exec-batch="),
-    );
+    )
+      || hasShortFlag(args, "H") || hasShortFlag(args, "I") || hasShortFlag(args, "u")
+      || hasOption(args, "--hidden") || hasOption(args, "--no-ignore") || hasOption(args, "--unrestricted");
   }
 
   if (commandName === "less") return hasOption(args, "-o") || hasOption(args, "-O") || hasOption(args, "--log-file");
   if (commandName === "tree") return hasOption(args, "-o") || hasOption(args, "--output");
   if (commandName === "sort") return hasOption(args, "-o") || hasOption(args, "--output");
   if (commandName === "diff") return hasOption(args, "--output");
-  if (commandName === "rg") return hasOption(args, "--pre") || hasOption(args, "--hidden") || hasShortFlag(args, "u");
+  if (commandName === "rg") {
+    return hasOption(args, "--pre") || hasOption(args, "--hidden") || hasShortFlag(args, "u")
+      || getRgGlobValues(args).some((glob) => glob.trim().startsWith("!"))
+      || hasOption(args, "--files")
+      || hasUnsafeDefaultRgTraversal(args);
+  }
 
   return false;
+}
+
+function hasGrepRecursiveDirectoryOption(args: string[]): boolean {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "-d" || arg === "--directories") {
+      if (args[i + 1] === "recurse") return true;
+      continue;
+    }
+    if (arg === "--directories=recurse" || arg === "-drecurse") return true;
+  }
+  return false;
+}
+
+function hasUnsafeDefaultRgTraversal(args: string[]): boolean {
+  const paths = getPatternThenPathCandidates(args);
+  return paths.length === 0 || paths.some(isDirectoryLikeSearchPath);
+}
+
+function getRgGlobValues(args: string[]): string[] {
+  const globs: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "-g" || arg === "--glob" || arg === "--iglob") {
+      if (args[i + 1] && args[i + 1] !== "--") {
+        globs.push(args[i + 1]!);
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("-g") && arg.length > 2) globs.push(arg.slice(2));
+    else if (arg.startsWith("--glob=")) globs.push(arg.slice("--glob=".length));
+    else if (arg.startsWith("--iglob=")) globs.push(arg.slice("--iglob=".length));
+  }
+  return globs;
 }
 
 function hasOption(args: string[], option: string): boolean {

@@ -94,10 +94,10 @@ Status: Completed on 2026-06-23.
   - Include direct read/search/list tool-call names when Pi exposes them as tools: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`.
   - For `bash`, allow only commands that are ordinary read/list/search commands under conservative restrictions: no output redirection except `2>/dev/null`, no append `>>`, no `sed -i`, no `tee`/`sponge`/`dd` write sinks. Prefer a dedicated default-mode predicate over blindly reusing plan-mode behavior.
   - Tighten safe-bash validation for metacharacters/chaining before auto-allowing: test and reject cases like `cat file > out`, `grep x file | tee out`, `find . -exec rm {} \\;`, `cat .env && echo ok`, command substitution that executes mutating commands, and semicolon chains with mutations.
-  - Candidate read-only bash prefixes can reuse `SAFE_PLAN_BASH_PREFIXES`, but consider excluding network-ish commands from default auto-allow if they are too broad. Default should prompt for diff-producing or pager/config-sensitive Git commands like `git diff`, `git log`, and `git show`.
+  - Candidate read-only bash prefixes can reuse `SAFE_PLAN_BASH_PREFIXES`, but consider excluding network-ish commands from default auto-allow if they are too broad. Default should prompt for broad `rg`, recursive `grep`, hidden/unrestricted `fd`, and diff-producing or pager/config-sensitive Git commands like `git diff`, `git log`, and `git show`.
 - Sensitive read detection:
   - Resolve path-like values relative to `ctx.cwd ?? process.cwd()` and `home` when possible.
-  - For direct path tools, inspect likely path fields: `path`, `paths`, `file`, `files`, `glob` only when it contains a concrete sensitive segment; avoid treating every glob as secret.
+  - For direct path tools, inspect likely path fields: `path`, `paths`, `file`, `files`, `glob` only when it contains a concrete sensitive segment; broad directory traversal or negative-only globs should still fall through to confirmation.
   - For bash, inspect command text for sensitive segments and protected path references before auto-allowing.
   - Secret-like path/name patterns should include:
     - exact or prefix dot env: `.env`, `.env.local`, `.env.production`, etc.
