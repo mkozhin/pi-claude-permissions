@@ -1,6 +1,6 @@
 # Default Read Allowlist and Strict Permission Mode
 
-Status: Completed on 2026-06-23.
+Status: Implementation completed on 2026-06-23; review-fix iterations continued through 2026-06-25.
 
 ## Overview
 - Add a new built-in `strict` permission mode that preserves the current maximum-confirmation behavior: prompt before almost every tool call unless a hard safety block applies or a session approval exists.

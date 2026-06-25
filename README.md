@@ -22,7 +22,7 @@ Upstream is preserved as the `upstream` git remote so we can pull fixes later, w
 Day-to-day confirmation mode.
 
 - Allows ordinary bounded read/search/list operations without confirmation: `read`, `grep`, `find`, `ls`, `rg`, `fd`, `bat`, `eza`, and safe read-only `bash` commands such as `ls`, file-specific `grep`/`rg`, `cat`, and `git status`.
-- Broad directory searches may still prompt when they could sweep likely-secret files, including `grep`/`rg` over `.` without a safe narrowing glob and `find`/`fd` calls without a concrete name or pattern.
+- Broad directory searches/lists may still prompt when they could sweep likely-secret files or expose home/root structure, including `grep`/`rg` over `.` without a safe narrowing glob, `find`/`fd` calls without a concrete name or pattern, and direct list/search roots such as `/` or `~`.
 - Default auto-approves only simple read-only bash syntax, including simple pipelines when every segment is an allowed read-only command. It prompts for control-flow chaining, command substitution, redirection other than `2>/dev/null`, write-capable options, recursive `grep`, broad `rg`, hidden/unrestricted `fd`, and diff-producing or pager/config-sensitive Git commands such as `git diff`, `git log`, `git show`, and `git config`.
 - Prompts before reading likely-secret paths such as `.env*`, `.ssh`, `.aws`, `.gnupg`, `.gpg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, and credential/token/secret/private-key/auth-named files. This also applies when a read/search/list tool or defaulting bash command would read from a likely-secret current working directory.
 - Direct read/search/list calls that reference configured protected paths also prompt in `default`; bash/write/edit references to protected paths remain hard-blocked before confirmation and cannot be session-approved.
@@ -79,12 +79,12 @@ It also injects visible planning instructions into the next agent turn so the mo
 
 - Allows `write` and `edit` automatically.
 - Prompts for bash commands.
-- Still blocks protected paths and catastrophic commands.
+- Still blocks catastrophic bash and bash/write/edit operations targeting configured protected paths. Direct read/search/list calls are not hard-blocked in this mode.
 
 ### `bypassPermissions`
 
 - Allows normal operations without confirmation.
-- Still blocks catastrophic commands and protected paths.
+- Still blocks catastrophic bash and bash/write/edit operations targeting configured protected paths. Direct read/search/list calls are not hard-blocked in this mode.
 
 ## Installation for local development
 
@@ -130,6 +130,8 @@ Set this in `~/.pi/agent/settings.json` or project-local `.pi/settings.json`:
 
 You can also override the startup mode for a pi process with `--permission-mode strict`. Valid flag values are `default`, `plan`, `acceptEdits`, `bypassPermissions`, and `strict`.
 
+`--dangerously-skip-permissions` starts the session in `bypassPermissions`. Catastrophic bash checks and bash/write/edit protected-path checks still run.
+
 `allowCatastrophic` defaults to `false`. When set to `true`, catastrophic command blocking and critical `rm -rf` detection are allowed. Protected path checks still run.
 
 `shiftTabOptions` controls only the `Shift+Tab` cycle. If you omit it, the default cycle includes every built-in mode, including `strict`. If you configure it yourself, include `strict` there if you want it in the cycle. `/permissions` still lists and can select every mode, including `strict`.
@@ -137,6 +139,12 @@ You can also override the startup mode for a pi process with `--permission-mode 
 `hideDefaultMode` hides the footer/status indicator when the active mode equals the configured default.
 
 `planModeAllowedMcpServers` allows specific MCP servers during plan mode.
+
+Additional permission policy can be set in `~/.pi/agent/extensions/permissions.json` or project-local `.pi/extensions/permissions.json`. Project-local values take precedence over global values. These files support `mode`, `protectedPaths`, `dangerousPatterns`, `catastrophicPatterns`, `shiftTabOptions`, `defaultMode`, `hideDefaultMode`, `planModeAllowedMcpServers`, and `customModes`.
+
+`protectedPaths` defaults to sensitive home paths such as `~/.ssh`, `~/.aws`, shell profiles, package credentials, Docker/Kube config, and Pi auth. In `default`, direct read/search/list references to protected paths prompt for confirmation; bash/write/edit references are blocked before confirmation in every mode.
+
+`dangerousPatterns` and `catastrophicPatterns` are string patterns checked in bash commands. Dangerous matches add warning text to the confirmation prompt; catastrophic matches are blocked unless `allowCatastrophic` is true.
 
 ## Powerbar visibility
 
@@ -166,6 +174,7 @@ Custom modes cannot override the always-on catastrophic command checks or protec
 
 ```bash
 npm install
+npm run test
 npm run typecheck
 npm run pack:dry
 ```
@@ -173,8 +182,9 @@ npm run pack:dry
 Useful local loop:
 
 1. Edit `extensions/index.ts`.
-2. Run `npm run typecheck`.
-3. Run `/reload` in pi if installed via `pi install ./`, or restart the `pi -e ./` test session.
+2. Run `npm run test`.
+3. Run `npm run typecheck`.
+4. Run `/reload` in pi if installed via `pi install ./`, or restart the `pi -e ./` test session.
 
 ## Fork notes
 

@@ -149,15 +149,15 @@ const DEFAULT_SAFE_BASH_COMMANDS = new Set([
 const SAFE_PLAN_BASH_PREFIXES = [
   "cat", "head", "tail", "less", "more", "grep", "find", "ls",
   "pwd", "echo", "printf", "wc", "sort", "uniq", "diff", "file",
-  "stat", "du", "df", "tree", "which", "whereis", "type", "env",
+  "stat", "du", "df", "tree", "which", "whereis", "type",
   "printenv", "uname", "whoami", "id", "date", "cal", "uptime",
-  "ps", "top", "htop", "free", "curl", "jq", "sed", "awk",
+  "ps", "top", "htop", "free", "jq",
   "rg", "fd", "bat", "eza", "git status", "git log", "git diff",
   "git show", "git branch", "git remote", "git ls-", "git config --get",
   "gh pr view", "gh pr list", "gh pr diff", "gh pr checks", "gh pr status",
   "gh issue view", "gh issue list", "gh issue status", "gh repo view",
   "gh run view", "gh run list", "gh release view", "gh release list",
-  "gh api", "gh auth status", "npm list", "npm ls", "npm view",
+  "gh auth status", "npm list", "npm ls", "npm view",
   "npm info", "npm search", "npm outdated", "npm audit",
 ];
 
@@ -792,7 +792,7 @@ async function enforceAlwaysOnSafety(args: {
     const command = String(input.command ?? "");
 
     if (!allowCatastrophic) {
-      const criticalRm = checkCriticalRmRf(command);
+      const criticalRm = checkCriticalRmRf(command, ctx.cwd ?? process.cwd());
       if (criticalRm) {
         ctx.ui.notify(`🚫 Blocked catastrophic command: ${criticalRm}`, "error");
         return { block: true as const, reason: `Catastrophic command blocked: ${criticalRm}. This cannot be overridden.` };
@@ -945,6 +945,12 @@ function hasPotentialSensitiveDirectTraversal(toolName: string, input: Record<st
     return getDirectReadNamePatternInputs(toolName, input).length === 0;
   }
 
+  if (toolName === "ls" || toolName === "eza") {
+    const paths = getDirectReadPathInputs(input);
+    const listTargets = paths.length > 0 ? paths : ["."];
+    return listTargets.some((path) => isBroadUnsafeDirectSearchRoot(path, ctx, home));
+  }
+
   if (toolName !== "grep" && toolName !== "rg") return false;
 
   const globs: string[] = [];
@@ -953,6 +959,7 @@ function hasPotentialSensitiveDirectTraversal(toolName: string, input: Record<st
   const paths: string[] = [];
   for (const key of ["path", "paths", "file", "files"]) collectStringValues(input[key], paths);
   const searchPaths = paths.length > 0 ? paths : ["."];
+  if (searchPaths.some((path) => isBroadUnsafeDirectSearchRoot(path, ctx, home))) return true;
   if (!searchPaths.some(isDirectoryLikeSearchPath)) return false;
   return !hasSafeConstrainingSearchGlob(globs, ctx, home);
 }
@@ -2085,11 +2092,10 @@ function hasUnsafePlanCommandOptions(segment: string): boolean {
   return false;
 }
 
-function checkCriticalRmRf(command: string): string | null {
-  const home = homedir();
+function checkCriticalRmRf(command: string, cwd = process.cwd(), home = homedir()): string | null {
   for (const targets of getRmRfTargetGroups(command, home)) {
     for (const target of targets) {
-      const resolved = resolveAbsoluteShellTarget(target, home);
+      const resolved = resolveAbsoluteShellTarget(target, home) ?? resolveShellTarget(target, cwd);
       if (!resolved) continue;
 
       const normalized = resolved.replace(/\/+$/, "") || "/";

@@ -510,11 +510,19 @@ async function testDefaultPromptsForSensitiveDirectReads() {
     ["rg", { pattern: "needle", path: "." }],
     ["rg", { pattern: "needle", path: ".", glob: "!*.env" }],
     ["rg", { pattern: "needle", path: ".", glob: "*" }],
+    ["rg", { pattern: "needle", path: "/", glob: "*.ts" }],
+    ["rg", { pattern: "needle", path: "~", glob: "*.ts" }],
+    ["grep", { pattern: "needle", path: "/", glob: "*.ts" }],
+    ["grep", { pattern: "needle", path: "~", glob: "*.ts" }],
     ["fd", { pattern: "credentials" }],
     ["fd", { name: "id_rsa" }],
     ["fd", { path: "/", pattern: "config" }],
     ["fd", { path: "~", pattern: "config" }],
     ["bat", { file: ".npmrc" }],
+    ["ls", { path: "/" }],
+    ["ls", { path: "~" }],
+    ["eza", { path: "/" }],
+    ["eza", { path: "~" }],
     ["eza", { glob: "private-key.pem" }],
     ["eza", { name: "service.auth.json" }],
   ]) {
@@ -737,6 +745,10 @@ async function testCatastrophicBashRunsBeforeAllowBranches() {
     { label: "bypass second rm semicolon critical path", mode: "bypassPermissions", command: "rm -rf ./build; rm -rf /" },
     { label: "bypass second rm and critical path", mode: "bypassPermissions", command: "rm -rf ./build && rm -rf /tmp" },
     { label: "bypass second rm pipe critical path", mode: "bypassPermissions", command: "rm -rf ./build | rm -rf /usr" },
+    { label: "bypass relative rm current home path", mode: "bypassPermissions", command: "rm -rf .", cwdForHome: (home) => home },
+    { label: "bypass relative rm parent home path", mode: "bypassPermissions", command: "rm -rf ..", cwdForHome: (home) => `${home}/project` },
+    { label: "bypass relative rm current root path", mode: "bypassPermissions", command: "rm -rf .", cwd: "/" },
+    { label: "bypass relative rm parent usr path", mode: "bypassPermissions", command: "rm -rf ..", cwd: "/usr/local" },
     { label: "bypass long rm flags root path", mode: "bypassPermissions", command: "rm --recursive --force /" },
     { label: "bypass mixed rm flags critical path", mode: "bypassPermissions", command: "rm -r --force /usr" },
     { label: "bypass IFS-separated rm root path", mode: "bypassPermissions", command: "rm -rf${IFS}/" },
@@ -744,7 +756,10 @@ async function testCatastrophicBashRunsBeforeAllowBranches() {
     { label: "default critical rm path", mode: "default", command: "rm -rf /tmp" },
     { label: "strict critical rm path", mode: "strict", command: "rm -rf /var" },
   ]) {
-    const h = await createHarness({ localConfig: testCase.localConfig });
+    const h = await createHarness({
+      localConfig: testCase.localConfig,
+      cwd: testCase.cwd ?? (testCase.cwdForHome ? testCase.cwdForHome(TEST_HOME) : undefined),
+    });
     h.setFlag("permission-mode", testCase.mode);
     await h.sessionStart();
 
@@ -843,8 +858,18 @@ async function testPlanModeRejectsChainedOrMutatingBashSegments() {
     "cat README.md; rm -rf ./generated",
     "cat README.md & touch generated.txt",
     "cat README.md | touch generated.txt",
+    "env touch generated.txt",
+    "env -i touch generated.txt",
+    "env bash -c 'touch generated.txt'",
+    "awk 'BEGIN { system(\"touch generated.txt\") }'",
+    "sed -n 'e touch generated.txt' README.md",
     "curl -o generated.txt https://example.com/file",
     "curl -O https://example.com/file",
+    "curl -X POST https://example.com/resource",
+    "curl --upload-file README.md https://example.com/upload",
+    "gh api -X POST /repos/owner/repo/issues",
+    "gh api --method DELETE /repos/owner/repo/issues/1",
+    "gh api -f title=generated /repos/owner/repo/issues",
     "npm audit --fix",
     "sed -n w generated.txt README.md",
     "sed -n 'w out.txt' README.md",
