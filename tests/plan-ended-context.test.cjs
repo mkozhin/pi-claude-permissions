@@ -102,6 +102,7 @@ async function createHarness(options = {}) {
         lastSelectPrompt = prompt;
         lastSelectOptions = selectOptions;
         const response = selectResponses.length > 0 ? selectResponses.shift() : undefined;
+        if (typeof response === "function") return response(selectOptions, prompt);
         return typeof response === "number" ? selectOptions[response] : response;
       },
     },
@@ -224,7 +225,9 @@ async function testShiftTabCycleIncludesStrictWithoutReorderingExistingModes() {
 }
 
 async function testPermissionsCommandListsStrict() {
-  const h = await createHarness({ selectResponses: [4] });
+  const h = await createHarness({
+    selectResponses: [(options) => options.find((option) => option.includes("Strict"))],
+  });
 
   await h.permissionsCommand();
 
@@ -570,6 +573,26 @@ async function testDefaultPromptsForProtectedDirectReads() {
   assert.equal(customProtected.selectCallCount(), 1, "default should prompt for configured protected read path");
   assert.equal(customResult?.block, true);
   assert.equal(customResult?.reason, "User denied read");
+
+  for (const [toolName, input] of [
+    ["grep", { pattern: "needle", path: ".", glob: "*.ts" }],
+    ["rg", { pattern: "needle", path: ".", glob: "*.ts" }],
+    ["find", { path: ".", pattern: "*.ts" }],
+    ["fd", { path: ".", pattern: "README" }],
+  ]) {
+    const h = await createHarness({
+      cwd: `${TEST_HOME}/workspace/project`,
+      localConfig: { protectedPaths: [`${TEST_HOME}/workspace/project/private`] },
+    });
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall(toolName, input);
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt when ${toolName} search root contains a protected path`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, `User denied ${toolName}`);
+  }
 }
 
 async function testDefaultPromptsForImplicitSensitiveCwdReads() {
@@ -652,6 +675,9 @@ async function testDefaultPromptsForImplicitSensitiveBashCwdReads() {
 
 async function testDefaultPromptsForBroadHomeBashTraversal() {
   for (const command of [
+    "ls",
+    "ls .",
+    "eza .",
     "find . -name config",
     "find -name config",
     "du .",
@@ -740,11 +766,19 @@ async function testCatastrophicBashRunsBeforeAllowBranches() {
     { label: "bypass critical rm $HOME path", mode: "bypassPermissions", command: "rm -rf $HOME" },
     { label: "bypass critical rm ${HOME} path", mode: "bypassPermissions", command: "rm -rf ${HOME}" },
     { label: "bypass critical rm ${HOME:?} path", mode: "bypassPermissions", command: "rm -rf ${HOME:?}" },
+    { label: "bypass critical rm ${HOME substring} path", mode: "bypassPermissions", command: "rm -rf ${HOME:0:999}" },
+    { label: "bypass critical rm unresolved default path", mode: "bypassPermissions", command: "rm -rf ${target:-/}" },
+    { label: "bypass critical rm unresolved pwd path", mode: "bypassPermissions", command: "rm -rf $PWD" },
+    { label: "bypass critical rm usr glob path", mode: "bypassPermissions", command: "rm -rf /usr/*" },
+    { label: "bypass critical rm etc glob path", mode: "bypassPermissions", command: "rm -rf /etc/*" },
+    { label: "bypass critical rm home glob path", mode: "bypassPermissions", command: "rm -rf ~/*" },
     { label: "bypass critical rm semicolon separator path", mode: "bypassPermissions", command: "rm -rf /tmp; echo ok" },
     { label: "bypass critical rm pipe separator path", mode: "bypassPermissions", command: "rm -rf /tmp|cat" },
     { label: "bypass second rm semicolon critical path", mode: "bypassPermissions", command: "rm -rf ./build; rm -rf /" },
     { label: "bypass second rm and critical path", mode: "bypassPermissions", command: "rm -rf ./build && rm -rf /tmp" },
     { label: "bypass second rm pipe critical path", mode: "bypassPermissions", command: "rm -rf ./build | rm -rf /usr" },
+    { label: "bypass command substitution critical rm path", mode: "bypassPermissions", command: "echo $(rm -rf /)" },
+    { label: "bypass backtick critical rm path", mode: "bypassPermissions", command: "echo `rm -rf /`" },
     { label: "bypass relative rm current home path", mode: "bypassPermissions", command: "rm -rf .", cwdForHome: (home) => home },
     { label: "bypass relative rm parent home path", mode: "bypassPermissions", command: "rm -rf ..", cwdForHome: (home) => `${home}/project` },
     { label: "bypass relative rm current root path", mode: "bypassPermissions", command: "rm -rf .", cwd: "/" },
@@ -831,6 +865,7 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "default bash broad hidden-glob protected path", mode: "default", toolName: "bash", input: { command: "cat ~/.*/*" } },
     { label: "bypass bash command substitution protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ~/$(printf .ssh)/config" } },
     { label: "bypass bash ANSI-C quoted protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/$'\\x2essh'/config" } },
+    { label: "bypass python concatenated protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "python -c 'import os; open(os.path.expanduser(\"~\")+\"/.ssh/config\").read()'" } },
     { label: "bypass git status protected cwd", mode: "bypassPermissions", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "default git status protected cwd", mode: "default", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "bypass root protected write descendant", mode: "bypassPermissions", toolName: "write", input: { path: "/tmp/config" }, localConfig: { protectedPaths: ["/"] } },
@@ -963,6 +998,8 @@ async function testAllowCatastrophicTrueReachesNormalModeHandling() {
   for (const [label, options] of [
     ["local settings", { localSettings: { piClaudePermissions: { allowCatastrophic: true } } }],
     ["global settings", { globalSettings: { piClaudePermissions: { allowCatastrophic: true } } }],
+    ["local permissions config", { localConfig: { allowCatastrophic: true } }],
+    ["global permissions config", { globalConfig: { allowCatastrophic: true } }],
   ]) {
     const h = await createHarness(options);
     h.setFlag("permission-mode", "bypassPermissions");
@@ -977,14 +1014,20 @@ async function testAllowCatastrophicTrueReachesNormalModeHandling() {
 }
 
 async function testConfiguredCatastrophicPatternsBlockWhenNotAllowed() {
-  const h = await createHarness();
-  h.setFlag("permission-mode", "bypassPermissions");
-  await h.sessionStart();
+  for (const [label, options] of [
+    ["local permissions config", { localConfig: { catastrophicPatterns: [{ pattern: "nuke-prod", description: "custom local catastrophe" }] } }],
+    ["global permissions config", { globalConfig: { catastrophicPatterns: [{ pattern: "nuke-prod", description: "custom global catastrophe" }] } }],
+  ]) {
+    const h = await createHarness(options);
+    h.setFlag("permission-mode", "bypassPermissions");
+    await h.sessionStart();
 
-  const result = await h.toolCall("bash", { command: "sudo mkfs /dev/sda" });
+    const result = await h.toolCall("bash", { command: "echo nuke-prod" });
 
-  assertCatastrophicBlock(result, "configured catastrophic pattern");
-  assert.equal(h.selectCallCount(), 0, "configured catastrophic pattern should not prompt before blocking");
+    assertCatastrophicBlock(result, `${label} configured catastrophic pattern`);
+    assert.match(result.reason, /custom .* catastrophe/, `${label} should use configured catastrophic description`);
+    assert.equal(h.selectCallCount(), 0, `${label} configured catastrophic pattern should not prompt before blocking`);
+  }
 }
 
 async function testDangerouslySkipPermissionsStillRunsAlwaysOnSafety() {

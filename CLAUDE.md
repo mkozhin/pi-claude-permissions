@@ -9,7 +9,7 @@
 - `strict` mode skips the default preapproval path and falls through to confirmation after always-on safety and session approvals.
 - Protected-path bash/write/edit blocks are non-overridable and must not be bypassed by `bypassPermissions`, custom modes, or session approvals.
 - When adding permission checks, use the shared path-resolution and bash-candidate helpers instead of raw substring checks. Resolve direct paths relative to `ctx.cwd` and `home`, inspect direct path fields plus `pattern`/`name` where relevant, and run bash paths through the candidate/variant helpers so tilde, `$HOME`, globs, and implicit cwd reads stay consistent.
-- Plan-mode bash uses `SAFE_PLAN_BASH_PREFIXES` plus option guards in `hasUnsafePlanCommandOptions`. Adding a safe prefix must include write/network/output option review and regression tests; commands that can execute subcommands or mutate external services should stay out of the prefix list.
+- Plan-mode bash uses `SAFE_PLAN_BASH_PREFIXES` plus option guards in `hasUnsafePlanCommandOptions`. Generic `curl`, `sed`, `awk`, `env`, generic `gh api`, command substitution, control-flow chaining, output-writing options, `find`/`fd` exec or delete options, `rg --pre`, unsafe `bat` pager/config options, `git --output`/`--ext-diff`/`--textconv`, and special device reads are not plan-safe. Adding a safe prefix must include write/network/output option review and regression tests; commands that can execute subcommands or mutate external services should stay out of the prefix list.
 
 ## Maintainer Workflow
 

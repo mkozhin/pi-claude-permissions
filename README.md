@@ -48,7 +48,7 @@ Read-only exploration mode.
 Allowed tools:
 
 - `read`
-- `bash` when the command looks read-only
+- `bash` when the command matches the conservative read-only allowlist
 - `grep`
 - `find`
 - `ls`
@@ -64,6 +64,8 @@ Blocked in plan mode:
 - `write`
 - mutating bash commands
 - anything outside the read/search allowlist
+
+Plan-mode bash uses a fixed allowlist of simple read/list/search/status commands plus explicit read-only GitHub, git, and npm metadata commands. Generic `curl`, `sed`, `awk`, `env`, and generic `gh api` are not plan-safe. Commands with output-writing options, command substitution, control-flow chaining, `find`/`fd` exec or delete options, `rg --pre`, unsafe `bat` pager/config options, `git --output`/`--ext-diff`/`--textconv`, or special device reads are blocked.
 
 Catastrophic bash commands and bash/write/edit operations targeting configured protected paths are blocked before plan-mode allow or deny handling.
 
@@ -140,7 +142,14 @@ You can also override the startup mode for a pi process with `--permission-mode 
 
 `planModeAllowedMcpServers` allows specific MCP servers during plan mode.
 
-Additional permission policy can be set in `~/.pi/agent/extensions/permissions.json` or project-local `.pi/extensions/permissions.json`. Project-local values take precedence over global values. These files support `mode`, `protectedPaths`, `dangerousPatterns`, `catastrophicPatterns`, `shiftTabOptions`, `defaultMode`, `hideDefaultMode`, `planModeAllowedMcpServers`, and `customModes`.
+Additional permission policy can be set in `~/.pi/agent/extensions/permissions.json` or project-local `.pi/extensions/permissions.json`. These files support `mode`, `protectedPaths`, `dangerousPatterns`, `catastrophicPatterns`, `allowCatastrophic`, `shiftTabOptions`, `defaultMode`, `hideDefaultMode`, `planModeAllowedMcpServers`, and `customModes`.
+
+Precedence:
+
+- `--dangerously-skip-permissions` overrides startup mode to `bypassPermissions`.
+- `--permission-mode` overrides the configured startup mode.
+- For `defaultMode`, `shiftTabOptions`, `hideDefaultMode`, `planModeAllowedMcpServers`, `customModes`, and `allowCatastrophic`: project settings > global settings > project permissions file > global permissions file.
+- For `mode`, `protectedPaths`, `dangerousPatterns`, and `catastrophicPatterns`: project permissions file > global permissions file.
 
 `protectedPaths` defaults to sensitive home paths such as `~/.ssh`, `~/.aws`, shell profiles, package credentials, Docker/Kube config, and Pi auth. In `default`, direct read/search/list references to protected paths prompt for confirmation; bash/write/edit references are blocked before confirmation in every mode.
 
@@ -166,9 +175,33 @@ The segment uses the same short Claude-like labels as the built-in status fallba
 | `bypassPermissions` | `⏵⏵⏵⏵ Bypass` |
 | `strict` | `⏵! Strict` |
 
-The extension also supports `customModes` for project-specific policies. We can shape this further as our needs become clear.
+The extension also supports `customModes` for project-specific policies:
 
-Custom modes cannot override the always-on catastrophic command checks or protected-path blocks for bash/write/edit operations. Those checks run before custom policies, bypass mode, and session approvals.
+```json
+{
+  "customModes": [
+    {
+      "id": "projectSafe",
+      "label": "Project Safe",
+      "status": "P",
+      "description": "Allow project writes and limited localhost access",
+      "policy": {
+        "excludedTools": ["browser"],
+        "allowedWriteRoots": ["cwd", "parent", "~/scratch", "/tmp/project-output"],
+        "blockedBashPatterns": [
+          { "pattern": "deploy", "description": "deployment commands require confirmation" }
+        ],
+        "network": {
+          "allowLocalhostOnly": true,
+          "allowedPorts": [3000, 5173]
+        }
+      }
+    }
+  ]
+}
+```
+
+Relative write/edit paths are resolved against the Pi session `cwd`. Custom modes cannot override the always-on catastrophic command checks or protected-path blocks for bash/write/edit operations. Those checks run before custom policies, bypass mode, and session approvals.
 
 ## Development
 

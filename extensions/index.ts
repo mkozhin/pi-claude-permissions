@@ -11,7 +11,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 
 type PermissionMode = string;
 type Pattern = { pattern: string; description: string };
@@ -142,7 +142,7 @@ const FD_OPTIONS_WITH_VALUE = new Set([
 const DEFAULT_SAFE_BASH_COMMANDS = new Set([
   "cat", "head", "tail", "grep", "rg", "find", "ls",
   "pwd", "wc", "sort", "uniq", "diff", "file", "stat", "du", "df",
-  "tree", "which", "whereis", "type", "echo", "printf", "jq", "fd",
+  "which", "whereis", "type", "echo", "printf", "jq", "fd",
   "bat", "eza",
 ]);
 
@@ -430,6 +430,8 @@ async function loadConfig(): Promise<PermissionsConfig> {
     protectedPaths: local.protectedPaths ?? global.protectedPaths ?? DEFAULT_PROTECTED_PATHS,
     allowCatastrophic: localSettings.piClaudePermissions?.allowCatastrophic
       ?? globalSettings.piClaudePermissions?.allowCatastrophic
+      ?? local.allowCatastrophic
+      ?? global.allowCatastrophic
       ?? false,
     shiftTabOptions: localSettings.piClaudePermissions?.shiftTabOptions
       ?? globalSettings.piClaudePermissions?.shiftTabOptions
@@ -829,12 +831,56 @@ function isSessionAllowed(toolName: string, input: Record<string, unknown>, sess
 }
 
 function findProtectedBashPath(command: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
-  for (const segment of splitShellCommandSegments(normalizeShellPathText(command, home))) {
+  const normalizedCommand = normalizeShellPathText(command, home);
+  for (const segment of splitShellCommandSegments(normalizedCommand)) {
     for (const candidate of getBashPathCandidates(segment, home)) {
       const protectedPath = findProtectedPathForInput(candidate, ctx, home, protectedPaths);
       if (protectedPath) return protectedPath;
     }
   }
+
+  if (hasRuntimePathConstructionSyntax(command)) {
+    return findProtectedPathInCompactedShellText(normalizedCommand, ctx, home, protectedPaths);
+  }
+}
+
+function hasRuntimePathConstructionSyntax(command: string): boolean {
+  return /[`]|\$\(|<\(|>\(/.test(command)
+    || /\b(?:eval|source)\b/i.test(command)
+    || /\b(?:python|python3|node|ruby|perl|php|deno|bun|sh|bash|zsh|fish)\s+-(?:c|e|r)\b/i.test(command);
+}
+
+function findProtectedPathInCompactedShellText(command: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
+  const compactCommand = compactPathConstructionText(command);
+
+  return protectedPaths.find((path) => {
+    const normalizedPath = resolve(path);
+    return getProtectedPathTextVariants(normalizedPath, ctx, home).some((variant) =>
+      compactCommand.includes(compactPathConstructionText(variant)),
+    );
+  });
+}
+
+function getProtectedPathTextVariants(protectedPath: string, ctx: UiContext, home: string): string[] {
+  const variants = [protectedPath];
+  const normalizedHome = resolve(home);
+  const cwd = resolve(ctx.cwd ?? process.cwd());
+
+  if (protectedPath === normalizedHome || protectedPath.startsWith(`${normalizedHome}/`)) {
+    const homeRelative = protectedPath === normalizedHome ? "" : protectedPath.slice(normalizedHome.length + 1);
+    variants.push(homeRelative ? `~/${homeRelative}` : "~");
+  }
+
+  if (protectedPath === cwd || protectedPath.startsWith(`${cwd}/`)) {
+    const cwdRelative = protectedPath === cwd ? "." : relative(cwd, protectedPath);
+    variants.push(cwdRelative, `./${cwdRelative}`);
+  }
+
+  return uniqueStrings(variants);
+}
+
+function compactPathConstructionText(value: string): string {
+  return value.replace(/[\s"'`+()[\]{},]/g, "");
 }
 
 function splitShellCommandSegments(command: string): string[] {
@@ -911,7 +957,39 @@ function hasProtectedDirectReadPath(toolName: string, input: Record<string, unkn
     if (findProtectedPathForInput(path, ctx, home, protectedPaths)) return true;
   }
 
+  if (directReadToolMayTraverse(toolName)) {
+    for (const root of getDirectTraversalRoots(toolName, input)) {
+      if (findProtectedPathContainedByRoot(root, ctx, home, protectedPaths)) return true;
+    }
+  }
+
   return false;
+}
+
+function directReadToolMayTraverse(toolName: string): boolean {
+  return toolName === "grep" || toolName === "rg" || toolName === "find" || toolName === "fd";
+}
+
+function getDirectTraversalRoots(toolName: string, input: Record<string, unknown>): string[] {
+  if (toolName === "find" || toolName === "fd") return getDirectSearchRoots(input);
+  if (toolName !== "grep" && toolName !== "rg") return [];
+
+  const paths: string[] = [];
+  for (const key of ["path", "paths", "file", "files"]) collectStringValues(input[key], paths);
+  return paths.length > 0 ? paths : ["."];
+}
+
+function findProtectedPathContainedByRoot(rawRoot: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
+  const resolvedRoot = resolveReadPath(normalizeShellPathText(rawRoot, home), ctx, home);
+  const normalizedRoot = resolve(resolvedRoot);
+
+  return protectedPaths.find((path) => {
+    const normalizedPath = resolve(path);
+    if (hasGlobSyntax(normalizedRoot)) return pathPatternMayReferencePath(normalizedRoot, normalizedPath);
+    if (normalizedRoot === normalizedPath) return true;
+    if (normalizedRoot === "/") return normalizedPath.startsWith("/");
+    return normalizedPath.startsWith(`${normalizedRoot}/`);
+  });
 }
 
 function getDirectReadPathInputs(input: Record<string, unknown>): string[] {
@@ -1763,11 +1841,9 @@ function hasUnsafeDefaultReadOptions(commandName: string, args: string[], ctx: U
       || hasUnsafeDefaultFdTraversal(args, ctx, home);
   }
 
-  if (commandName === "ls" || commandName === "eza") return hasUnsafeDefaultListTraversal(args);
+  if (commandName === "ls" || commandName === "eza") return hasUnsafeDefaultListTraversal(args, ctx, home);
   if (commandName === "du") return hasUnsafeDefaultDuTraversal(args, ctx, home);
   if (commandName === "tail") return hasShortFlag(args, "f") || hasShortFlag(args, "F") || hasOption(args, "--follow");
-  if (commandName === "less") return hasOption(args, "-o") || hasOption(args, "-O") || hasOption(args, "--log-file");
-  if (commandName === "tree") return true;
   if (commandName === "sort") return hasOption(args, "-o") || hasOption(args, "--output");
   if (commandName === "diff") return hasOption(args, "--output") || hasUnsafeDefaultDiffTraversal(args, ctx, home);
   if (commandName === "file") {
@@ -1851,10 +1927,12 @@ function getFindSearchRoots(args: string[]): string[] {
   return roots;
 }
 
-function hasUnsafeDefaultListTraversal(args: string[]): boolean {
+function hasUnsafeDefaultListTraversal(args: string[], ctx: UiContext, home: string): boolean {
+  const paths = getPositionalArgs(args);
+  const listTargets = paths.length > 0 ? paths : ["."];
   return hasShortFlag(args, "R")
     || hasOption(args, "--recursive")
-    || getPositionalArgs(args).some(isBroadUnsafeSearchRoot);
+    || listTargets.some((path) => isBroadUnsafeSearchRootForCwd(path, ctx, home));
 }
 
 function hasUnsafeDefaultDuTraversal(args: string[], ctx: UiContext, home: string): boolean {
@@ -2095,6 +2173,10 @@ function hasUnsafePlanCommandOptions(segment: string): boolean {
 function checkCriticalRmRf(command: string, cwd = process.cwd(), home = homedir()): string | null {
   for (const targets of getRmRfTargetGroups(command, home)) {
     for (const target of targets) {
+      if (hasUnresolvedShellExpansion(target)) {
+        return `rm -rf ${target} — recursive delete target uses unresolved shell expansion`;
+      }
+
       const resolved = resolveAbsoluteShellTarget(target, home) ?? resolveShellTarget(target, cwd);
       if (!resolved) continue;
 
@@ -2102,6 +2184,13 @@ function checkCriticalRmRf(command: string, cwd = process.cwd(), home = homedir(
       if (normalized === "/") return "rm -rf / — recursive delete root";
       if (normalized === home) return "rm -rf ~ — recursive delete entire home directory";
       if (CRITICAL_DIRS.includes(normalized)) return `rm -rf ${normalized} — recursive delete critical system directory`;
+
+      const globBase = getGlobbedRmBase(normalized);
+      if (globBase) {
+        if (globBase === "/") return "rm -rf / — recursive delete root";
+        if (globBase === home) return "rm -rf ~ — recursive delete entire home directory";
+        if (CRITICAL_DIRS.includes(globBase)) return `rm -rf ${globBase}/* — recursive delete critical system directory contents`;
+      }
     }
   }
 
@@ -2124,12 +2213,15 @@ function checkDangerousRmRf(command: string, cwd: string): { description: string
 
 function getRmRfTargetGroups(command: string, home = homedir()): string[][] {
   const groups: string[][] = [];
-  for (const segment of splitShellCommandSegments(normalizeRmCommandText(command, home))) {
-    const tokens = tokenizeShellLike(segment).map((token) => token.trim()).filter((token) => token.length > 0);
-    for (let i = 0; i < tokens.length; i += 1) {
-      if (getCommandName(tokens[i]!) !== "rm") continue;
-      const targets = getRecursiveForceRmTargets(tokens.slice(i + 1));
-      if (targets.length > 0) groups.push(targets);
+  const normalized = normalizeRmCommandText(command, home);
+  for (const commandText of uniqueStrings([normalized, exposeNestedShellCommandText(normalized)])) {
+    for (const segment of splitShellCommandSegments(commandText)) {
+      const tokens = tokenizeShellLike(segment).map((token) => token.trim()).filter((token) => token.length > 0);
+      for (let i = 0; i < tokens.length; i += 1) {
+        if (getCommandName(tokens[i]!) !== "rm") continue;
+        const targets = getRecursiveForceRmTargets(tokens.slice(i + 1));
+        if (targets.length > 0) groups.push(targets);
+      }
     }
   }
   return groups;
@@ -2137,6 +2229,29 @@ function getRmRfTargetGroups(command: string, home = homedir()): string[][] {
 
 function normalizeRmCommandText(command: string, home: string): string {
   return normalizeShellPathText(command, home).replace(/\$\{IFS\}|\$IFS\b/g, " ");
+}
+
+function exposeNestedShellCommandText(command: string): string {
+  return command.replace(/\$\(/g, " ").replace(/[`()]/g, " ");
+}
+
+function hasUnresolvedShellExpansion(value: string): boolean {
+  return /[$`]/.test(value);
+}
+
+function getGlobbedRmBase(targetPath: string): string | null {
+  if (!hasGlobSyntax(targetPath)) return null;
+
+  const normalized = targetPath.replace(/\\/g, "/");
+  const segments = normalized.split("/");
+  const prefixSegments: string[] = [];
+  for (const segment of segments) {
+    if (hasGlobSyntax(segment)) break;
+    prefixSegments.push(segment);
+  }
+
+  const prefix = prefixSegments.join("/") || (normalized.startsWith("/") ? "/" : "");
+  return prefix.replace(/\/+$/, "") || "/";
 }
 
 function getRecursiveForceRmTargets(args: string[]): string[] {

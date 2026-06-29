@@ -71,9 +71,9 @@ Status: Implementation completed on 2026-06-23; review-fix iterations continued 
   - Custom mode policies keep using `enforceCustomMode()`.
   - `default` and `strict` get explicit logic in the central `tool_call` handler because their semantics are built-in and user-facing.
 - Introduce helpers with narrow responsibilities:
-  - `isAlwaysAllowedWorkflowTool(toolName)` for `manage_todo_list` and `ask_user`.
-  - `isDefaultAllowedReadTool(toolName, input, ctx, home)` for ordinary read/search/list tools.
-  - `hasSensitiveDirectReadPath(...)` / `hasSensitiveBashReadPath(...)` for secret-like read paths and bash commands.
+  - `DEFAULT_ALWAYS_ALLOWED_TOOLS` for `manage_todo_list` and `ask_user`.
+  - `isDefaultAllowedReadTool(toolName, input, ctx, home, protectedPaths)` for ordinary read/search/list tools.
+  - Sensitive direct-read and bash read-path detection helpers for secret-like read paths and bash commands.
   - Prefer a dedicated `isSafeDefaultReadCommand(command)` for default mode. Reuse `isSafePlanCommand()` only if implementation verifies it permits only ordinary read/list/search commands and does not include broader plan-mode conveniences.
 - The tool-call decision order must preserve safety precedence explicitly:
   1. Enforce always-on safety blocks before any allowlist, session approval, custom policy allow, plan-mode allow, or bypass-mode allow can return.
