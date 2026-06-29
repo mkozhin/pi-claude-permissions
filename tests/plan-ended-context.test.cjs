@@ -454,6 +454,22 @@ async function testDefaultPromptsForUnsafeBashSyntax() {
     assert.equal(result?.reason, "User denied bash");
     assert.equal(h.lastSelectPrompt(), `🔒 bash: ${command}`);
   }
+
+  for (const command of ["find . -name README", "fd README ."]) {
+    const h = await createHarness({
+      cwd: `${TEST_HOME}/workspace`,
+      localConfig: { protectedPaths: ["~/workspace/protected"] },
+    });
+    h.setFlag("permission-mode", "default");
+    await h.sessionStart();
+
+    const result = await h.toolCall("bash", { command });
+
+    assert.equal(h.selectCallCount(), 1, `default should prompt before traversing a root containing a protected child: ${command}`);
+    assert.equal(result?.block, true);
+    assert.equal(result?.reason, "User denied bash");
+    assert.equal(h.lastSelectPrompt(), `🔒 bash: ${command}`);
+  }
 }
 
 async function testDefaultPromptsForWritesEditsAndMutatingBash() {
@@ -756,6 +772,8 @@ async function testCatastrophicBashRunsBeforeAllowBranches() {
   for (const testCase of [
     { label: "plan allow path", mode: "plan", command: "cat sudo mkfs" },
     { label: "plan deny path", mode: "plan", command: "sudo mkfs /dev/sda" },
+    { label: "bypass plain mkfs disk path", mode: "bypassPermissions", command: "mkfs /dev/sda" },
+    { label: "bypass reordered dd disk write path", mode: "bypassPermissions", command: "dd of=/dev/sda if=/dev/zero" },
     { label: "custom policy allow path", mode: "customAllow", command: "cat sudo mkfs", localConfig: customModeConfig },
     { label: "bypass allow path", mode: "bypassPermissions", command: "cat sudo mkfs" },
     { label: "default read allowlist path", mode: "default", command: "cat sudo mkfs" },
@@ -787,6 +805,7 @@ async function testCatastrophicBashRunsBeforeAllowBranches() {
     { label: "bypass mixed rm flags critical path", mode: "bypassPermissions", command: "rm -r --force /usr" },
     { label: "bypass IFS-separated rm root path", mode: "bypassPermissions", command: "rm -rf${IFS}/" },
     { label: "bypass ANSI-C quoted rm root path", mode: "bypassPermissions", command: "rm -rf $'\\x2f'" },
+    { label: "bypass dynamically constructed rm root path", mode: "bypassPermissions", command: "r$(printf m) -rf /" },
     { label: "default critical rm path", mode: "default", command: "rm -rf /tmp" },
     { label: "strict critical rm path", mode: "strict", command: "rm -rf /var" },
   ]) {
@@ -866,8 +885,18 @@ async function testProtectedPathsRunBeforeAllowAndDenyBranches() {
     { label: "bypass bash command substitution protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ~/$(printf .ssh)/config" } },
     { label: "bypass bash ANSI-C quoted protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "cat $HOME/$'\\x2essh'/config" } },
     { label: "bypass python concatenated protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "python -c 'import os; open(os.path.expanduser(\"~\")+\"/.ssh/config\").read()'" } },
+    { label: "bypass python dynamic slash protected path", mode: "bypassPermissions", toolName: "bash", input: { command: "python -c 'import os; open(os.environ[\"HOME\"]+chr(47)+\".ssh/config\").read()'" } },
     { label: "bypass git status protected cwd", mode: "bypassPermissions", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
     { label: "default git status protected cwd", mode: "default", toolName: "bash", input: { command: "git status" }, cwdForHome: (home) => `${home}/.ssh` },
+    { label: "bypass find cwd contains protected child", mode: "bypassPermissions", toolName: "bash", input: { command: "find . -name README" }, cwdForHome: (home) => home },
+    { label: "bypass fd cwd contains protected child", mode: "bypassPermissions", toolName: "bash", input: { command: "fd README ." }, cwdForHome: (home) => home },
+    { label: "bypass recursive grep cwd contains protected child", mode: "bypassPermissions", toolName: "bash", input: { command: "grep -R token ." }, cwdForHome: (home) => home },
+    { label: "bypass rg cwd contains protected child", mode: "bypassPermissions", toolName: "bash", input: { command: "rg token ." }, cwdForHome: (home) => home },
+    { label: "bypass rg files cwd contains protected child", mode: "bypassPermissions", toolName: "bash", input: { command: "rg --files ." }, cwdForHome: (home) => home },
+    { label: "bypass recursive ls cwd contains protected child", mode: "bypassPermissions", toolName: "bash", input: { command: "ls -R ." }, cwdForHome: (home) => home },
+    { label: "default quoted custom protected path with spaces", mode: "default", toolName: "bash", input: { command: "cat \"~/Secret Dir/config\"" }, localConfig: { protectedPaths: ["~/Secret Dir"] } },
+    { label: "strict escaped custom protected path with spaces", mode: "strict", toolName: "bash", input: { command: "cat ~/Secret\\ Dir/config" }, localConfig: { protectedPaths: ["~/Secret Dir"] } },
+    { label: "bypass escaped custom protected path with spaces", mode: "bypassPermissions", toolName: "bash", input: { command: "cat ~/Secret\\ Dir/config" }, localConfig: { protectedPaths: ["~/Secret Dir"] } },
     { label: "bypass root protected write descendant", mode: "bypassPermissions", toolName: "write", input: { path: "/tmp/config" }, localConfig: { protectedPaths: ["/"] } },
     { label: "bypass root protected bash descendant", mode: "bypassPermissions", toolName: "bash", input: { command: "cat /tmp/config" }, localConfig: { protectedPaths: ["/"] } },
   ]) {
@@ -921,6 +950,11 @@ async function testPlanModeRejectsChainedOrMutatingBashSegments() {
     "bat --pager=./pager README.md",
     "rg --pre ./script token .",
     "cat /dev/zero",
+    "printenv",
+    "echo $OPENAI_API_KEY",
+    "printf %s $GH_TOKEN",
+    "gh auth status --show-token",
+    "gh auth status -t",
   ]) {
     const h = await createHarness();
     h.setFlag("permission-mode", "plan");
@@ -938,6 +972,7 @@ async function testPlanModeRejectsChainedOrMutatingBashSegments() {
   await h.sessionStart();
 
   assert.equal(await h.toolCall("bash", { command: "cat README.md | grep pi" }), undefined, "plan mode should allow safe read-only pipelines");
+  assert.equal(await h.toolCall("bash", { command: "echo $HOME" }), undefined, "plan mode should allow HOME expansion");
 }
 
 async function testCustomModePolicyAppliesAfterSafetyPasses() {
@@ -1007,6 +1042,9 @@ async function testAllowCatastrophicTrueReachesNormalModeHandling() {
 
     assert.equal(await h.toolCall("bash", { command: "rm -rf /tmp" }), undefined, `${label} allowCatastrophic should let catastrophic commands reach bypass handling`);
     assert.equal(await h.toolCall("bash", { command: "sudo mkfs /dev/sda" }), undefined, `${label} allowCatastrophic should let configured catastrophic patterns reach bypass handling`);
+    assert.equal(await h.toolCall("bash", { command: "mkfs /dev/sda" }), undefined, `${label} allowCatastrophic should let builtin disk checks reach bypass handling`);
+    assert.equal(await h.toolCall("bash", { command: "dd of=/dev/sda if=/dev/zero" }), undefined, `${label} allowCatastrophic should let raw disk checks reach bypass handling`);
+    assert.equal(await h.toolCall("bash", { command: "r$(printf m) -rf /" }), undefined, `${label} allowCatastrophic should let dynamic rm checks reach bypass handling`);
 
     const protectedResult = await h.toolCall("bash", { command: "rm -rf ~/.ssh" });
     assertProtectedPathBlock(protectedResult, `${label} allowCatastrophic protected path`);

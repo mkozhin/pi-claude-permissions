@@ -150,7 +150,7 @@ const SAFE_PLAN_BASH_PREFIXES = [
   "cat", "head", "tail", "less", "more", "grep", "find", "ls",
   "pwd", "echo", "printf", "wc", "sort", "uniq", "diff", "file",
   "stat", "du", "df", "tree", "which", "whereis", "type",
-  "printenv", "uname", "whoami", "id", "date", "cal", "uptime",
+  "uname", "whoami", "id", "date", "cal", "uptime",
   "ps", "top", "htop", "free", "jq",
   "rg", "fd", "bat", "eza", "git status", "git log", "git diff",
   "git show", "git branch", "git remote", "git ls-", "git config --get",
@@ -382,6 +382,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
       toolName,
       input: event.input,
       ctx,
+      mode,
       home,
       protectedPaths,
       catastrophicPatterns,
@@ -783,12 +784,13 @@ async function enforceAlwaysOnSafety(args: {
   toolName: string;
   input: Record<string, unknown>;
   ctx: UiContext;
+  mode: PermissionMode;
   home: string;
   protectedPaths: string[];
   catastrophicPatterns: Pattern[];
   allowCatastrophic: boolean;
 }) {
-  const { toolName, input, ctx, home, protectedPaths, catastrophicPatterns, allowCatastrophic } = args;
+  const { toolName, input, ctx, mode, home, protectedPaths, catastrophicPatterns, allowCatastrophic } = args;
 
   if (toolName === "bash") {
     const command = String(input.command ?? "");
@@ -800,7 +802,7 @@ async function enforceAlwaysOnSafety(args: {
         return { block: true as const, reason: `Catastrophic command blocked: ${criticalRm}. This cannot be overridden.` };
       }
 
-      const catastrophe = findMatch(command, catastrophicPatterns);
+      const catastrophe = findBuiltinCatastrophicBashCommand(command) ?? findMatch(command, catastrophicPatterns);
       if (catastrophe) {
         ctx.ui.notify(`🚫 Blocked catastrophic command: ${catastrophe.description}`, "error");
         return { block: true as const, reason: `Catastrophic command blocked: ${catastrophe.description}. This cannot be overridden.` };
@@ -812,6 +814,15 @@ async function enforceAlwaysOnSafety(args: {
       const readable = protectedPath.replace(home, "~");
       ctx.ui.notify(`🚫 Blocked bash targeting protected path: ${readable}`, "error");
       return { block: true as const, reason: `Bash command references protected path ${readable}. This cannot be overridden.` };
+    }
+
+    if (shouldHardBlockProtectedBashTraversal(mode)) {
+      const protectedTraversalPath = findProtectedBashTraversalCommandPath(command, ctx, home, protectedPaths);
+      if (protectedTraversalPath) {
+        const readable = protectedTraversalPath.replace(home, "~");
+        ctx.ui.notify(`🚫 Blocked bash traversing protected path: ${readable}`, "error");
+        return { block: true as const, reason: `Bash command may traverse protected path ${readable}. This cannot be overridden.` };
+      }
     }
   }
 
@@ -825,14 +836,17 @@ async function enforceAlwaysOnSafety(args: {
   }
 }
 
+function shouldHardBlockProtectedBashTraversal(mode: PermissionMode): boolean {
+  return mode !== "default" && mode !== "strict";
+}
+
 function isSessionAllowed(toolName: string, input: Record<string, unknown>, sessionAllow: SessionAllow): boolean {
   if (toolName === "bash" && sessionAllow.commands.has(String(input.command ?? ""))) return true;
   return sessionAllow.tools.has(toolName);
 }
 
 function findProtectedBashPath(command: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
-  const normalizedCommand = normalizeShellPathText(command, home);
-  for (const segment of splitShellCommandSegments(normalizedCommand)) {
+  for (const segment of splitShellCommandSegments(command)) {
     for (const candidate of getBashPathCandidates(segment, home)) {
       const protectedPath = findProtectedPathForInput(candidate, ctx, home, protectedPaths);
       if (protectedPath) return protectedPath;
@@ -840,8 +854,80 @@ function findProtectedBashPath(command: string, ctx: UiContext, home: string, pr
   }
 
   if (hasRuntimePathConstructionSyntax(command)) {
-    return findProtectedPathInCompactedShellText(normalizedCommand, ctx, home, protectedPaths);
+    const normalizedCommand = normalizeShellPathText(command, home);
+    return findProtectedPathInCompactedShellText(normalizedCommand, ctx, home, protectedPaths)
+      ?? findProtectedPathInDynamicShellText(command, normalizedCommand, ctx, home, protectedPaths);
   }
+}
+
+function findProtectedBashTraversalCommandPath(command: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
+  for (const segment of splitShellCommandSegments(command)) {
+    const protectedPath = findProtectedBashTraversalPath(segment, ctx, home, protectedPaths);
+    if (protectedPath) return protectedPath;
+  }
+}
+
+function findProtectedBashTraversalPath(segment: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
+  const tokens = getNormalizedShellTokens(segment, home);
+  const commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
+  if (commandIndex < 0) return;
+
+  const commandName = getCommandName(tokens[commandIndex]!);
+  const args = tokens.slice(commandIndex + 1);
+  const roots = getBashTraversalRoots(commandName, args);
+  for (const root of roots) {
+    const protectedPath = findProtectedPathContainedByRoot(root, ctx, home, protectedPaths);
+    if (protectedPath) return protectedPath;
+  }
+}
+
+function getBashTraversalRoots(commandName: string, args: string[]): string[] {
+  if (commandName === "find") {
+    const roots = getFindSearchRoots(args);
+    return roots.length > 0 ? roots : ["."];
+  }
+
+  if (commandName === "fd") {
+    const positional = getFdPositionalArgs(args);
+    const roots = getFdSearchRoots(args, positional);
+    if (roots.length > 0) return roots;
+    return positional.length < 2 ? ["."] : [];
+  }
+
+  if (commandName === "grep") {
+    if (!isRecursiveGrepArgs(args)) return [];
+    const roots = getPatternThenPathCandidates(args);
+    return roots.length > 0 ? roots : ["."];
+  }
+
+  if (commandName === "rg") {
+    const roots = hasOption(args, "--files") ? getAllPositionalPathCandidates(args) : getPatternThenPathCandidates(args);
+    return roots.length > 0 ? roots : ["."];
+  }
+
+  if (commandName === "ls" || commandName === "eza") {
+    if (!isRecursiveListArgs(args)) return [];
+    const roots = getPositionalArgs(args);
+    return roots.length > 0 ? roots : ["."];
+  }
+
+  if (commandName === "tree") {
+    const roots = getPositionalArgs(args);
+    return roots.length > 0 ? roots : ["."];
+  }
+
+  return [];
+}
+
+function isRecursiveGrepArgs(args: string[]): boolean {
+  return hasShortFlag(args, "R") || hasShortFlag(args, "r")
+    || hasOption(args, "--recursive")
+    || hasOption(args, "--dereference-recursive")
+    || hasGrepRecursiveDirectoryOption(args);
+}
+
+function isRecursiveListArgs(args: string[]): boolean {
+  return hasShortFlag(args, "R") || hasOption(args, "--recursive") || hasOption(args, "--recurse");
 }
 
 function hasRuntimePathConstructionSyntax(command: string): boolean {
@@ -859,6 +945,36 @@ function findProtectedPathInCompactedShellText(command: string, ctx: UiContext, 
       compactCommand.includes(compactPathConstructionText(variant)),
     );
   });
+}
+
+function findProtectedPathInDynamicShellText(command: string, normalizedCommand: string, ctx: UiContext, home: string, protectedPaths: string[]): string | undefined {
+  if (!hasHomeReferenceInShellText(command, normalizedCommand, home)) return;
+  const compactCommand = compactPathConstructionText(normalizedCommand).toLowerCase();
+  const normalizedHome = resolve(home);
+
+  return protectedPaths.find((path) => {
+    const normalizedPath = resolve(path);
+    if (normalizedPath !== normalizedHome && !normalizedPath.startsWith(`${normalizedHome}/`)) return false;
+
+    const homeRelative = normalizedPath === normalizedHome ? "" : normalizedPath.slice(normalizedHome.length + 1);
+    if (!homeRelative) return true;
+
+    const compactRelative = compactPathConstructionText(homeRelative).toLowerCase();
+    if (compactRelative && compactCommand.includes(compactRelative)) return true;
+
+    const segments = splitPathSegments(homeRelative)
+      .map((segment) => compactPathConstructionText(segment).toLowerCase())
+      .filter((segment) => segment.length > 0);
+    return segments.length > 0 && segments.every((segment) => compactCommand.includes(segment));
+  });
+}
+
+function hasHomeReferenceInShellText(command: string, normalizedCommand: string, home: string): boolean {
+  const compactCommand = compactPathConstructionText(normalizedCommand).toLowerCase();
+  const compactHome = compactPathConstructionText(resolve(home)).toLowerCase();
+  return compactCommand.includes(compactHome)
+    || /(?:\bHOME\b|\bhomedir\b|\bhomeDir\b|expanduser|Path\.home|user\.home)/.test(command)
+    || /~/.test(command);
 }
 
 function getProtectedPathTextVariants(protectedPath: string, ctx: UiContext, home: string): string[] {
@@ -914,6 +1030,7 @@ function findProtectedPathForGlobPattern(targetPath: string, protectedPaths: str
 function isDefaultAllowedReadTool(toolName: string, input: Record<string, unknown>, ctx: UiContext, home: string, protectedPaths: string[]): boolean {
   if (toolName === "bash") {
     return findSensitiveBashReadPath(String(input.command ?? ""), ctx, home) === undefined
+      && findProtectedBashTraversalCommandPath(String(input.command ?? ""), ctx, home, protectedPaths) === undefined
       && isSafeDefaultReadCommand(String(input.command ?? ""), ctx, home);
   }
   if (!DEFAULT_READ_TOOLS.has(toolName)) return false;
@@ -1073,7 +1190,7 @@ function isDirectoryLikeSearchPath(rawPath: string): boolean {
 }
 
 function findSensitiveBashReadPath(command: string, ctx: UiContext, home: string): string | undefined {
-  for (const segment of splitShellCommandSegments(normalizeShellPathText(command, home))) {
+  for (const segment of splitShellCommandSegments(command)) {
     for (const candidate of getBashPathCandidates(segment, home)) {
       if (isSensitiveReadPath(candidate, ctx, home)) return candidate;
     }
@@ -1081,7 +1198,7 @@ function findSensitiveBashReadPath(command: string, ctx: UiContext, home: string
 }
 
 function getBashPathCandidates(segment: string, home: string): string[] {
-  const tokens = tokenizeShellLike(segment).map(cleanShellToken).filter((token): token is string => token !== undefined);
+  const tokens = getNormalizedShellTokens(segment, home);
   const commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
   const assignmentTokens = commandIndex < 0 ? tokens : tokens.slice(0, commandIndex);
   const assignments = getShellAssignments(assignmentTokens);
@@ -1154,10 +1271,151 @@ function decodeAnsiCString(content: string): string {
   });
 }
 
+function getNormalizedShellTokens(value: string, home: string): string[] {
+  return tokenizeShellLike(value)
+    .map((token) => cleanShellToken(normalizeShellPathText(token, home)))
+    .filter((token): token is string => token !== undefined);
+}
+
 function tokenizeShellLike(value: string): string[] {
-  return Array.from(value.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|([^\s]+)/g), (match) =>
-    match[1] ?? match[2] ?? match[3] ?? "",
-  );
+  const tokens: string[] = [];
+  let token = "";
+
+  const pushToken = () => {
+    if (token.length > 0) {
+      tokens.push(token);
+      token = "";
+    }
+  };
+
+  for (let i = 0; i < value.length;) {
+    const char = value[i]!;
+
+    if (/\s/.test(char)) {
+      pushToken();
+      i += 1;
+      continue;
+    }
+
+    if (char === "\\") {
+      if (i + 1 < value.length) {
+        token += value[i + 1]!;
+        i += 2;
+      } else {
+        token += char;
+        i += 1;
+      }
+      continue;
+    }
+
+    if (char === "$" && value[i + 1] === "'") {
+      const end = readQuotedEnd(value, i + 2, "'");
+      token += value.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    if (char === "'") {
+      const end = readQuotedEnd(value, i + 1, "'");
+      token += value.slice(i + 1, end - (value[end - 1] === "'" ? 1 : 0));
+      i = end;
+      continue;
+    }
+
+    if (char === "\"") {
+      const result = readDoubleQuotedText(value, i + 1);
+      token += result.text;
+      i = result.end;
+      continue;
+    }
+
+    if (char === "$" && value[i + 1] === "(") {
+      const end = readCommandSubstitutionEnd(value, i);
+      token += value.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    if (char === "`") {
+      const end = readBacktickEnd(value, i + 1);
+      token += value.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    token += char;
+    i += 1;
+  }
+
+  pushToken();
+  return tokens;
+}
+
+function readQuotedEnd(value: string, start: number, quote: string): number {
+  const end = value.indexOf(quote, start);
+  return end < 0 ? value.length : end + 1;
+}
+
+function readDoubleQuotedText(value: string, start: number): { text: string; end: number } {
+  let text = "";
+  for (let i = start; i < value.length; i += 1) {
+    const char = value[i]!;
+    if (char === "\"") return { text, end: i + 1 };
+    if (char === "\\" && i + 1 < value.length) {
+      text += value[i + 1]!;
+      i += 1;
+      continue;
+    }
+    text += char;
+  }
+  return { text, end: value.length };
+}
+
+function readCommandSubstitutionEnd(value: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < value.length;) {
+    const char = value[i]!;
+    if (char === "\\") {
+      i += 2;
+      continue;
+    }
+    if (char === "'") {
+      i = readQuotedEnd(value, i + 1, "'");
+      continue;
+    }
+    if (char === "\"") {
+      i = readDoubleQuotedText(value, i + 1).end;
+      continue;
+    }
+    if (char === "`") {
+      i = readBacktickEnd(value, i + 1);
+      continue;
+    }
+    if (char === "$" && value[i + 1] === "(") {
+      depth += 1;
+      i += 2;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      i += 1;
+      if (depth <= 0) return i;
+      continue;
+    }
+    i += 1;
+  }
+  return value.length;
+}
+
+function readBacktickEnd(value: string, start: number): number {
+  for (let i = start; i < value.length; i += 1) {
+    if (value[i] === "\\" && i + 1 < value.length) {
+      i += 1;
+      continue;
+    }
+    if (value[i] === "`") return i + 1;
+  }
+  return value.length;
 }
 
 function cleanShellToken(token: string): string | undefined {
@@ -1169,6 +1427,7 @@ function getShellPathReferenceCandidates(tokens: string[]): string[] {
   const paths: string[] = [];
   const pathReference = /(?:~(?:[A-Za-z0-9._-]+)?(?:\/[^\s"'`;&|<>,)]*)?|\/[^\s"'`;&|<>,)]*|\.\.?\/[^\s"'`;&|<>,)]*)/g;
   for (const token of tokens) {
+    if (isPathExpansionCandidate(token)) paths.push(token);
     for (const match of token.matchAll(pathReference)) {
       if (match[0] !== "." && match[0] !== "..") paths.push(match[0]);
     }
@@ -2102,7 +2361,8 @@ function hasUnsafePlanShellSyntax(command: string): boolean {
   return /[\r\n;]/.test(command)
     || /&&|\|\|/.test(command)
     || /&/.test(command)
-    || /`|\$\s*\(|<\(|>\(/.test(command);
+    || /`|\$\s*\(|<\(|>\(/.test(command)
+    || /\$(?!HOME\b|\{HOME\})/.test(command);
 }
 
 function isSafePlanCommandSegment(segment: string): boolean {
@@ -2166,8 +2426,75 @@ function hasUnsafePlanCommandOptions(segment: string): boolean {
   if (commandName === "bat") return hasUnsafeBatOptions(args);
   if (commandName === "rg") return hasOption(args, "--pre");
   if (commandName === "git") return hasOption(args, "--output") || hasOption(args, "--ext-diff") || hasOption(args, "--textconv");
+  if (commandName === "gh" && args[0] === "auth" && args[1] === "status") {
+    const statusArgs = args.slice(2);
+    return hasOption(statusArgs, "--show-token") || hasShortFlag(statusArgs, "t");
+  }
 
   return false;
+}
+
+function findBuiltinCatastrophicBashCommand(command: string): Pattern | undefined {
+  for (const segment of splitShellCommandSegments(command)) {
+    const tokens = tokenizeShellLike(segment).map(cleanShellToken).filter((token): token is string => token !== undefined);
+    const effectiveCommand = getEffectiveShellCommand(tokens);
+    if (!effectiveCommand) continue;
+
+    const { commandName, args } = effectiveCommand;
+    if (isMkfsCommand(commandName)) return { pattern: commandName, description: "filesystem format" };
+    if (commandName === "dd" && getDdOutputTargets(args).some(isRawDiskDevicePath)) {
+      return { pattern: "dd of=", description: "raw disk write" };
+    }
+  }
+}
+
+function getEffectiveShellCommand(tokens: string[]): { commandName: string; args: string[] } | undefined {
+  let commandIndex = tokens.findIndex((token) => !isShellAssignment(token));
+  if (commandIndex < 0) return;
+
+  let commandName = getCommandName(tokens[commandIndex]!);
+  if (commandName === "sudo") {
+    commandIndex = getSudoCommandIndex(tokens, commandIndex + 1);
+    if (commandIndex < 0) return;
+    commandName = getCommandName(tokens[commandIndex]!);
+  }
+
+  return { commandName, args: tokens.slice(commandIndex + 1) };
+}
+
+function getSudoCommandIndex(tokens: string[], start: number): number {
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+    if (token === "--") return i + 1 < tokens.length ? i + 1 : -1;
+    if (!token.startsWith("-")) return i;
+
+    const option = token.includes("=") ? token.slice(0, token.indexOf("=")) : token;
+    if (SUDO_OPTIONS_WITH_VALUE.has(option) && !token.includes("=")) i += 1;
+  }
+  return -1;
+}
+
+const SUDO_OPTIONS_WITH_VALUE = new Set([
+  "-A", "-a", "-b", "-C", "-c", "-D", "-g", "-h", "-p", "-R", "-r", "-T", "-t", "-U", "-u",
+  "--askpass", "--close-from", "--chdir", "--group", "--host", "--prompt", "--role", "--type", "--user",
+  "--command-timeout", "--login-class",
+]);
+
+function isMkfsCommand(commandName: string): boolean {
+  return commandName === "mkfs" || commandName.startsWith("mkfs.");
+}
+
+function getDdOutputTargets(args: string[]): string[] {
+  const targets: string[] = [];
+  for (const arg of args) {
+    const match = arg.match(/^of=(.+)$/);
+    if (match?.[1]) targets.push(match[1]);
+  }
+  return targets;
+}
+
+function isRawDiskDevicePath(path: string): boolean {
+  return /^\/dev\/(?:[svx]?d[a-z]\d*|nvme\d+n\d+(?:p\d+)?|disk\/)/.test(path);
 }
 
 function checkCriticalRmRf(command: string, cwd = process.cwd(), home = homedir()): string | null {
@@ -2218,13 +2545,30 @@ function getRmRfTargetGroups(command: string, home = homedir()): string[][] {
     for (const segment of splitShellCommandSegments(commandText)) {
       const tokens = tokenizeShellLike(segment).map((token) => token.trim()).filter((token) => token.length > 0);
       for (let i = 0; i < tokens.length; i += 1) {
-        if (getCommandName(tokens[i]!) !== "rm") continue;
+        const commandToken = tokens[i]!;
+        if (getCommandName(commandToken) !== "rm" && !shellCommandTokenMayExpandToName(commandToken, "rm")) continue;
         const targets = getRecursiveForceRmTargets(tokens.slice(i + 1));
         if (targets.length > 0) groups.push(targets);
       }
     }
   }
   return groups;
+}
+
+function shellCommandTokenMayExpandToName(token: string, expectedName: string): boolean {
+  const commandToken = getCommandName(token).toLowerCase();
+  if (!/[$`]/.test(commandToken)) return false;
+
+  const wildcard = "\u0000";
+  const pattern = commandToken
+    .replace(/\$\([^)]*(?:\)|$)/g, wildcard)
+    .replace(/`[^`]*(?:`|$)/g, wildcard)
+    .replace(/\$\{[^}]*\}/g, wildcard)
+    .replace(/\$[A-Za-z_][A-Za-z0-9_]*/g, wildcard);
+  if (!pattern.includes(wildcard)) return false;
+
+  const source = `^${pattern.split(wildcard).map(escapeRegExp).join(".*")}$`;
+  return new RegExp(source).test(expectedName.toLowerCase());
 }
 
 function normalizeRmCommandText(command: string, home: string): string {
