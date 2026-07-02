@@ -2744,7 +2744,7 @@ async function promptApproval(
     "Deny",
   ];
 
-  const choice = await ctx.ui.select(`${icon} ${description}`, options);
+  const choice = await promptApprovalChoice(ctx, `${icon} ${description}`, options);
   if (choice === options[0]) return;
 
   if (choice === options[1]) {

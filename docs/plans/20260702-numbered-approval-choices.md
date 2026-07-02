@@ -216,11 +216,11 @@
 **Files:**
 - Modify: `extensions/index.ts`
 
-- [ ] Replace `const choice = await ctx.ui.select(`${icon} ${description}`, options);` in `promptApproval()` with `const choice = await promptApprovalChoice(ctx, `${icon} ${description}`, options);`.
-- [ ] Verify no other logic in `promptApproval()` changed (diff review against the original function body).
-- [ ] Confirm the mode-select dialog call (~line 337, `ctx.ui.select("Select permission mode", options)`) and any other `ctx.ui.select`/`ctx.ui.confirm` call sites are untouched.
-- [ ] Run tests: `npm run test` — all previously-passing approval-flow assertions (`selectCallCount`, `lastSelectPrompt`, `lastSelectOptions`) must pass again, now driven end-to-end through the digit-key path via Task 3's mock. Fix any regex/parsing mismatches surfaced here.
-- [ ] Run `npm run typecheck` — must pass before next task.
+- [x] Replace `const choice = await ctx.ui.select(`${icon} ${description}`, options);` in `promptApproval()` with `const choice = await promptApprovalChoice(ctx, `${icon} ${description}`, options);`.
+- [x] Verify no other logic in `promptApproval()` changed (diff review against the original function body).
+- [x] Confirm the mode-select dialog call (~line 337, `ctx.ui.select("Select permission mode", options)`) and any other `ctx.ui.select`/`ctx.ui.confirm` call sites are untouched.
+- [x] Run tests: `npm run test` — all previously-passing approval-flow assertions (`selectCallCount`, `lastSelectPrompt`, `lastSelectOptions`) must pass again, now driven end-to-end through the digit-key path via Task 3's mock. Fix any regex/parsing mismatches surfaced here. Found and fixed a real mismatch: the mock's `custom()` only reconstructed `lastSelectPrompt` from the *first* rendered title line, which broke `testDefaultPromptsForUnsafeBashSyntax`'s case for a command containing a literal embedded newline (`"cat README.md\n touch generated.txt"`), since `promptApprovalChoice()`'s `render()` correctly splits multi-line titles into separate lines. Fixed the mock in `tests/plan-ended-context.test.cjs` to rejoin every raw rendered line up to the first blank separator line with `"\n"`, exactly reconstructing the original title string; updated Task 3's own `testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions` multi-line assertion (previously asserting the old "first line only" behavior) to expect the full rejoined multi-line prompt instead.
+- [x] Run `npm run typecheck` — must pass before next task.
 
 ### Task 5: Add focused tests for digit/arrow/escape/render-numbering behavior
 

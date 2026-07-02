@@ -114,6 +114,15 @@ async function createHarness(options = {}) {
       // `promptApprovalChoice()`'s exact "N. option" render format (with optional "→ "
       // highlight prefix) — if that render format changes, this mock must be updated in
       // lockstep, or it will silently stop matching.
+      //
+      // The title itself may be multi-line (`describeApprovalRequest()` embeds real "\n"
+      // for dangerous/catastrophic bash descriptions, and unsafe-bash-syntax detection can
+      // surface a command containing a literal newline). `promptApprovalChoice()`'s
+      // `render()` splits the title on "\n" into one rendered line per title line, followed
+      // by a blank separator line before the option lines. To reconstruct the *original*
+      // title string exactly (matching what `ctx.ui.select()` used to receive as a single
+      // `prompt` argument), every raw line up to — but not including — that first blank
+      // line is treated as part of the title and rejoined with "\n".
       custom(factory) {
         const fakeTui = { requestRender() {} };
         const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
@@ -126,10 +135,14 @@ async function createHarness(options = {}) {
         const component = factory(fakeTui, fakeTheme, {}, done);
 
         const lines = component.render(80);
-        const nonEmpty = lines.map((l) => l.replace(/^\s+|\s+$/g, "")).filter(Boolean);
+        const blankIndex = lines.findIndex((l) => l.trim() === "");
+        const titleLines = blankIndex >= 0 ? lines.slice(0, blankIndex) : lines;
+        const optionLines = (blankIndex >= 0 ? lines.slice(blankIndex + 1) : [])
+          .map((l) => l.replace(/^\s+|\s+$/g, ""))
+          .filter(Boolean);
         selectCallCount += 1;
-        lastSelectPrompt = nonEmpty[0];
-        lastSelectOptions = nonEmpty
+        lastSelectPrompt = titleLines.join("\n");
+        lastSelectOptions = optionLines
           .map((l) => l.match(/^(?:→\s*)?\d+\.\s(.+)$/))
           .filter(Boolean)
           .map((m) => m[1]);
@@ -1335,8 +1348,8 @@ async function testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions() {
   await multiLineCase.ui().custom(makeChoiceFactory("🔒 bash: rm foo\n   ⚠️  DANGEROUS: recursive delete", options));
   assert.equal(
     multiLineCase.lastSelectPrompt(),
-    "🔒 bash: rm foo",
-    "custom() mock should take only the first split line of a multi-line title as the prompt",
+    "🔒 bash: rm foo\n   ⚠️  DANGEROUS: recursive delete",
+    "custom() mock should rejoin every rendered title line (up to the blank separator) to reconstruct the full multi-line prompt",
   );
 }
 
