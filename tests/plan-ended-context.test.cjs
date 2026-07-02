@@ -1353,6 +1353,176 @@ async function testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions() {
   );
 }
 
+// Task 5: focused tests for promptApprovalChoice()'s digit/arrow/escape/render-numbering
+// behavior. The harness's `ctx.ui.custom()` mock always drives resolution via real
+// `component.handleInput()` digit-key byte sequences (see createHarness above), so every
+// end-to-end `toolCall()` test already exercises the digit path — this test makes that
+// mapping (digit -> outcome) an explicit, direct assertion instead of an incidental one.
+async function testDigitKeySelectionResolvesCorrespondingOptionOutcome() {
+  // digit "1" -> "Allow once": approves this single call, does not persist.
+  const allowOnce = await createHarness({ selectResponses: [0] });
+  allowOnce.setFlag("permission-mode", "default");
+  await allowOnce.sessionStart();
+
+  assert.equal(await allowOnce.toolCall("write", { path: "generated.txt" }), undefined, "digit 1 (Allow once) should not block");
+  assert.equal(allowOnce.selectCallCount(), 1, "digit 1 should resolve from a single prompt");
+
+  const secondWrite = await allowOnce.toolCall("write", { path: "generated.txt" });
+  assert.equal(allowOnce.selectCallCount(), 2, "Allow once must not suppress a later prompt for the same write");
+  assert.equal(secondWrite?.block, true, "second write with no queued response defaults to Escape/Deny, proving no session allow was recorded");
+
+  // digit "2" -> "Allow for session": approves this call and persists for repeats.
+  const allowSession = await createHarness({ selectResponses: [1] });
+  allowSession.setFlag("permission-mode", "default");
+  await allowSession.sessionStart();
+
+  assert.equal(await allowSession.toolCall("write", { path: "generated.txt" }), undefined, "digit 2 (Allow for session) should not block");
+  assert.equal(await allowSession.toolCall("write", { path: "generated.txt" }), undefined, "digit 2 selection should suppress a repeat prompt");
+  assert.equal(allowSession.selectCallCount(), 1, "digit 2 selection should persist across repeated calls without re-prompting");
+
+  // digit "3" -> "Deny": blocks immediately with the standard user-denied reason.
+  const deny = await createHarness({ selectResponses: [2] });
+  deny.setFlag("permission-mode", "default");
+  await deny.sessionStart();
+
+  const denyResult = await deny.toolCall("write", { path: "generated.txt" });
+  assert.equal(denyResult?.block, true, "digit 3 (Deny) should block");
+  assert.equal(denyResult?.reason, "User denied write", "digit 3 (Deny) should report the standard user-denied reason");
+  assert.equal(deny.selectCallCount(), 1, "digit 3 should resolve from a single prompt");
+}
+
+// Drives a directly-constructed component (via the `makeChoiceFactory()` mirror of
+// `promptApprovalChoice()`, already used by Task 3's mock test) through a raw Up/Down/Enter
+// byte sequence, bypassing the harness's digit-driven `custom()` mock entirely — this is the
+// only way to exercise the non-digit arrow+Enter path end to end.
+async function testArrowNavigationWrapsAndEnterResolvesHighlightedOption() {
+  const options = ["Allow once", "Allow for session", "Deny"];
+  let renderRequests = 0;
+  const fakeTui = { requestRender() { renderRequests += 1; } };
+  const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
+  let doneValue;
+  let resolved = false;
+  const done = (value) => {
+    doneValue = value;
+    resolved = true;
+  };
+  const component = makeChoiceFactory("🔒 write: generated.txt", options)(fakeTui, fakeTheme, {}, done);
+
+  // 3 options: Down Down Down wraps 0 -> 1 -> 2 -> 0.
+  component.handleInput("\x1b[B");
+  component.handleInput("\x1b[B");
+  component.handleInput("\x1b[B");
+  assert.equal(resolved, false, "arrow navigation alone must not resolve the dialog");
+
+  // From index 0, Up wraps backward to the last option (index 2, "Deny").
+  component.handleInput("\x1b[A");
+  assert.equal(resolved, false, "arrow navigation alone must not resolve the dialog");
+  assert.equal(renderRequests, 4, "each arrow keypress should request exactly one re-render");
+
+  component.handleInput("\r"); // Enter confirms the highlighted option
+  assert.equal(resolved, true, "Enter should resolve the dialog");
+  assert.equal(doneValue, "Deny", "Enter should resolve the option highlighted after the Up/Down sequence");
+}
+
+// Proves a digit outside the option range is a pure no-op: the dialog stays open, done() is
+// not called, and later input (Enter) still resolves correctly against the untouched
+// selection state.
+async function testDigitOutsideOptionRangeIsIgnored() {
+  const options = ["Allow once", "Allow for session", "Deny"];
+  const fakeTui = { requestRender() {} };
+  const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
+  let doneValue;
+  let resolved = false;
+  const done = (value) => {
+    doneValue = value;
+    resolved = true;
+  };
+  const component = makeChoiceFactory("🔒 write: generated.txt", options)(fakeTui, fakeTheme, {}, done);
+
+  component.handleInput("9"); // out of range for a 3-option dialog
+  assert.equal(resolved, false, "an out-of-range digit must not resolve the dialog");
+  assert.equal(doneValue, undefined, "done() must not be called for an out-of-range digit");
+
+  component.handleInput("\r");
+  assert.equal(resolved, true, "Enter should still resolve normally after an ignored out-of-range digit");
+  assert.equal(doneValue, "Allow once", "the ignored out-of-range digit must not have changed the highlighted selection");
+}
+
+// End-to-end: Escape resolves undefined from promptApprovalChoice(), and promptApproval()
+// must treat that exactly like today's ctx.ui.select() cancel — a Deny block.
+async function testEscapeResolvesUndefinedAndTreatedAsDeny() {
+  const h = await createHarness({ selectResponses: [undefined] });
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const result = await h.toolCall("write", { path: "generated.txt" });
+
+  assert.equal(result?.block, true, "Escape should be treated as Deny by promptApproval()");
+  assert.equal(result?.reason, "User denied write", "Escape denial should report the standard user-denied reason");
+  assert.equal(h.selectCallCount(), 1, "Escape should still resolve from a single prompt");
+}
+
+// Regression guard for the core visible feature: the rendered dialog actually contains
+// numbered "N. option" lines with the correct option text.
+async function testRenderedOutputContainsNumberedOptionLines() {
+  const options = ["Allow once", "Allow for session", "Deny"];
+  const fakeTui = { requestRender() {} };
+  const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
+  const component = makeChoiceFactory("🔒 write: generated.txt", options)(fakeTui, fakeTheme, {}, () => {});
+
+  const lines = component.render(80);
+
+  assert.ok(lines.some((line) => line.includes("1. Allow once")), "render output should contain a numbered line for option 1");
+  assert.ok(lines.some((line) => line.includes("2. Allow for session")), "render output should contain a numbered line for option 2");
+  assert.ok(lines.some((line) => line.includes("3. Deny")), "render output should contain a numbered line for option 3");
+}
+
+// Drives a *real* dangerous bash command through toolCall() and captures the actual
+// `promptApprovalChoice()` factory from `extensions/index.ts` (not the `makeChoiceFactory()`
+// mirror) by temporarily overriding the harness's `ctx.ui.custom()`. Guards the render bug
+// found in plan review: `describeApprovalRequest()` embeds a real "\n" in the title for
+// dangerous/catastrophic bash commands, and render() must split that into separate line
+// entries rather than pushing one raw multi-line string.
+async function testDangerousBashMultiLineTitleSplitsIntoSeparateRenderLines() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const ui = h.ui();
+  const originalCustom = ui.custom;
+  let capturedLines;
+  ui.custom = (factory) =>
+    new Promise((resolvePromise) => {
+      const fakeTui = { requestRender() {} };
+      const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
+      const component = factory(fakeTui, fakeTheme, {}, resolvePromise);
+      capturedLines = component.render(80);
+      component.handleInput("1"); // Allow once, so promptApproval() completes normally
+    });
+
+  let result;
+  try {
+    result = await h.toolCall("bash", { command: "chmod -R 777 /tmp/generated" });
+  } finally {
+    ui.custom = originalCustom;
+  }
+
+  assert.equal(result, undefined, "Allow once should not block the dangerous command");
+  assert.ok(capturedLines, "the dangerous bash command should have reached promptApprovalChoice()'s custom() dialog");
+  assert.ok(
+    capturedLines.some((line) => line.includes("bash: chmod -R 777 /tmp/generated") && !line.includes("DANGEROUS")),
+    "the command line should be its own render line, not merged with the warning line",
+  );
+  assert.ok(
+    capturedLines.some((line) => line.includes("DANGEROUS") && line.includes("insecure recursive permissions")),
+    "the DANGEROUS warning should be its own separate render line",
+  );
+  assert.ok(
+    !capturedLines.some((line) => line.includes("\n")),
+    "no single render line should contain an embedded newline — the multi-line title must be split",
+  );
+}
+
 (async () => {
   await testStrictModeCanBeSelectedByFlag();
   await testStrictModeCanBeSelectedByConfig();
@@ -1390,6 +1560,12 @@ async function testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions() {
   await testCyclingThroughPlanDoesNotInjectEndedContext();
   await testLeavingAfterPlanTurnInjectsEndedContext();
   await testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions();
+  await testDigitKeySelectionResolvesCorrespondingOptionOutcome();
+  await testArrowNavigationWrapsAndEnterResolvesHighlightedOption();
+  await testDigitOutsideOptionRangeIsIgnored();
+  await testEscapeResolvesUndefinedAndTreatedAsDeny();
+  await testRenderedOutputContainsNumberedOptionLines();
+  await testDangerousBashMultiLineTitleSplitsIntoSeparateRenderLines();
   console.log("plan-ended-context tests passed");
 })().catch((error) => {
   console.error(error);
