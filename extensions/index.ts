@@ -9,6 +9,8 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
+import type { KeyId } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
@@ -2658,6 +2660,72 @@ function resolveShellTarget(target: string, cwd: string): string {
 
 function findMatch(command: string, patterns: Pattern[]): Pattern | undefined {
   return patterns.find((pattern) => command.includes(pattern.pattern));
+}
+
+/**
+ * Renders a numbered approval-choice dialog via `ctx.ui.custom()`, replacing the host's
+ * opaque `ctx.ui.select()` widget so digit keys (1-9) can resolve an option instantly,
+ * in addition to the usual Up/Down + Enter flow. Returns the chosen option string (must
+ * match one of the `options` entries) or `undefined` for cancel/Escape (treated as Deny
+ * by callers), matching `ctx.ui.select()`'s existing return contract exactly.
+ *
+ * Test coverage note: this helper is not separately exported from the module (only the
+ * default `permissionExtension` export is), and `tests/plan-ended-context.test.cjs`'s
+ * `loadExtension()` only surfaces that default export. Direct standalone unit tests are
+ * therefore not possible without changing the module's export surface; coverage is
+ * deferred to Task 5, which exercises this helper end-to-end through `promptApproval()`
+ * once Task 4 wires it in (digit-key, arrow/Enter, out-of-range digit, Escape, and
+ * multi-line-title render cases).
+ */
+async function promptApprovalChoice(ctx: UiContext, title: string, options: string[]): Promise<string | undefined> {
+  // `ctx.ui` is deliberately typed `any` (see UiContext) — the `custom()` call therefore
+  // can't accept an explicit `<T>` type argument (TS2347); the `Promise<string | undefined>`
+  // return type annotation on this function is what keeps callers type-safe instead.
+  return ctx.ui.custom((tui: any, theme: any, _kb: any, done: (result: string | undefined) => void) => {
+    let selectedIndex = 0;
+
+    function handleInput(data: string) {
+      for (let i = 0; i < options.length && i < 9; i++) {
+        if (matchesKey(data, String(i + 1) as KeyId)) {
+          done(options[i]);
+          return;
+        }
+      }
+      if (matchesKey(data, Key.up)) {
+        selectedIndex = (selectedIndex - 1 + options.length) % options.length;
+        tui.requestRender();
+        return;
+      }
+      if (matchesKey(data, Key.down)) {
+        selectedIndex = (selectedIndex + 1) % options.length;
+        tui.requestRender();
+        return;
+      }
+      if (matchesKey(data, Key.enter)) {
+        done(options[selectedIndex]);
+        return;
+      }
+      if (matchesKey(data, Key.escape)) {
+        done(undefined);
+        return;
+      }
+    }
+
+    function render(width: number): string[] {
+      // title may contain embedded "\n" for dangerous/catastrophic bash descriptions
+      // (see describeApprovalRequest, extensions/index.ts) — split, do not push raw,
+      // or the numbered dialog will visually break on the highest-stakes approvals.
+      const lines = [...title.split("\n").map((line) => theme.fg("text", line)), ""];
+      options.forEach((opt, i) => {
+        const prefix = i === selectedIndex ? theme.fg("accent", "→ ") : "  ";
+        lines.push(`${prefix}${i + 1}. ${opt}`);
+      });
+      lines.push("", theme.fg("dim", "↑↓ select • Enter confirm • 1-9 quick pick • Esc = Deny"));
+      return lines;
+    }
+
+    return { render, handleInput };
+  });
 }
 
 async function promptApproval(

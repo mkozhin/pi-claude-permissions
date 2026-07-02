@@ -190,13 +190,13 @@
 **Files:**
 - Modify: `extensions/index.ts`
 
-- [ ] Add `import { Key, matchesKey } from "@earendil-works/pi-tui";` near the top of `extensions/index.ts`.
-- [ ] Implement `promptApprovalChoice(ctx: UiContext, title: string, options: string[]): Promise<string | undefined>` near `promptApproval()` (~line 2663), per the Technical Details sketch: digit-key instant resolve (checked first), Up/Down move-with-wrap, Enter resolves highlighted, Escape resolves `undefined`.
-- [ ] Type the digit `matchesKey` call as `matchesKey(data, String(i + 1) as KeyId)` with `import type { KeyId } from "@earendil-works/pi-tui";` — confirmed correct against `pi-tui`'s `Digit = "0"|...|"9"` union folded into `KeyId` (see Technical Details); no `as any` needed.
-- [ ] Render output: title line, blank line, `"N. option"` lines with `"→ "` prefix on the selected index, trailing footer hint line — confirm against the real `theme` object's actual method signatures (check `pi-coding-agent`'s `Theme` type, e.g. via the `questionnaire.ts` example's usage of `theme.fg(...)`, before finalizing).
-- [ ] Do **not** wire this helper into `promptApproval()` yet (that's Task 4) — this task only adds the standalone helper.
-- [ ] Write a small standalone unit test (new test function in `tests/plan-ended-context.test.cjs`, or a separate lightweight test file if cleaner) that imports/exercises `promptApprovalChoice` in isolation if the file's export surface allows it; if the function is not separately exported/testable in isolation without the full harness, note this and defer direct coverage to Task 5 (exercised through `promptApproval()` end-to-end instead) — do not skip test writing, document the dependency per the plan's partial-implementation exception rule.
-- [ ] Run tests: `npm run test` and `npm run typecheck` — must pass before next task.
+- [x] Add `import { Key, matchesKey } from "@earendil-works/pi-tui";` near the top of `extensions/index.ts`.
+- [x] Implement `promptApprovalChoice(ctx: UiContext, title: string, options: string[]): Promise<string | undefined>` near `promptApproval()` (~line 2663), per the Technical Details sketch: digit-key instant resolve (checked first), Up/Down move-with-wrap, Enter resolves highlighted, Escape resolves `undefined`.
+- [x] Type the digit `matchesKey` call as `matchesKey(data, String(i + 1) as KeyId)` with `import type { KeyId } from "@earendil-works/pi-tui";` — confirmed correct against `pi-tui`'s `Digit = "0"|...|"9"` union folded into `KeyId` (see Technical Details); no `as any` needed.
+- [x] Render output: title line, blank line, `"N. option"` lines with `"→ "` prefix on the selected index, trailing footer hint line — confirm against the real `theme` object's actual method signatures (check `pi-coding-agent`'s `Theme` type, e.g. via the `questionnaire.ts` example's usage of `theme.fg(...)`, before finalizing).
+- [x] Do **not** wire this helper into `promptApproval()` yet (that's Task 4) — this task only adds the standalone helper.
+- [x] Write a small standalone unit test (new test function in `tests/plan-ended-context.test.cjs`, or a separate lightweight test file if cleaner) that imports/exercises `promptApprovalChoice` in isolation if the file's export surface allows it; if the function is not separately exported/testable in isolation without the full harness, note this and defer direct coverage to Task 5 (exercised through `promptApproval()` end-to-end instead) — do not skip test writing, document the dependency per the plan's partial-implementation exception rule. Confirmed `extensions/index.ts` only has a `default` export (`permissionExtension`) and `loadExtension()` in the test harness only surfaces `module.exports.default`, so isolated unit testing of `promptApprovalChoice` is not possible without changing the export surface; documented this inline above the helper and deferred coverage to Task 5, per the plan's partial-implementation exception.
+- [x] Run tests: `npm run test` and `npm run typecheck` — must pass before next task.
 
 ### Task 3: Extend test harness mock with `ctx.ui.custom()`
 
