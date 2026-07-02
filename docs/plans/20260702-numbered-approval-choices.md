@@ -265,9 +265,9 @@
 **Files:**
 - Modify: `docs/plans/20260702-numbered-approval-choices.md`
 
-- [ ] Perform the manual TUI verification steps listed under Post-Completion below, in a real `pi` session with this extension loaded (e.g. via `pi -e ./`), and record the outcome (pass/fail per step) directly in this plan file before considering it complete.
-- [ ] If any manual step fails, treat it as a blocker (`⚠️` prefix), fix, and re-verify — do not mark this task done with a failing manual step.
-- [ ] Move this plan to `docs/plans/completed/` once all automated and manual verification has passed.
+- [x] manual test (skipped - not automatable by subagent; requires human in live pi TUI session) — Perform the manual TUI verification steps listed under Post-Completion below, in a real `pi` session with this extension loaded (e.g. via `pi -e ./`), and record the outcome (pass/fail per step) directly in this plan file before considering it complete.
+- [x] manual test (skipped - not automatable by subagent; requires human in live pi TUI session) — If any manual step fails, treat it as a blocker (`⚠️` prefix), fix, and re-verify — do not mark this task done with a failing manual step.
+- [ ] Move this plan to `docs/plans/completed/` once all automated and manual verification has passed. (Left unchecked: the manual TUI verification above has not actually been performed by a human yet — only a subagent skip-note was recorded. Do not move to completed/ until a human runs the Post-Completion steps and confirms pass/fail in this file.)
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes.*
