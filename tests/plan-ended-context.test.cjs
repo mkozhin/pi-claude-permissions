@@ -105,6 +105,49 @@ async function createHarness(options = {}) {
         if (typeof response === "function") return response(selectOptions, prompt);
         return typeof response === "number" ? selectOptions[response] : response;
       },
+      // Mocks `ctx.ui.custom()` for `promptApprovalChoice()` (extensions/index.ts). This
+      // reconstructs `lastSelectPrompt`/`lastSelectOptions` by parsing the component's own
+      // `render()` output text, then drives the resolution via real `component.handleInput()`
+      // byte sequences (digit keys / Escape) rather than calling `done()` directly, so the
+      // digit-key code path itself is exercised by every approval-flow test. This coupling
+      // is intentional: the parsing regex below (`/^(?:→\s*)?\d+\.\s(.+)$/`) is tied to
+      // `promptApprovalChoice()`'s exact "N. option" render format (with optional "→ "
+      // highlight prefix) — if that render format changes, this mock must be updated in
+      // lockstep, or it will silently stop matching.
+      custom(factory) {
+        const fakeTui = { requestRender() {} };
+        const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
+        let doneValue;
+        let resolved = false;
+        const done = (value) => {
+          doneValue = value;
+          resolved = true;
+        };
+        const component = factory(fakeTui, fakeTheme, {}, done);
+
+        const lines = component.render(80);
+        const nonEmpty = lines.map((l) => l.replace(/^\s+|\s+$/g, "")).filter(Boolean);
+        selectCallCount += 1;
+        lastSelectPrompt = nonEmpty[0];
+        lastSelectOptions = nonEmpty
+          .map((l) => l.match(/^(?:→\s*)?\d+\.\s(.+)$/))
+          .filter(Boolean)
+          .map((m) => m[1]);
+
+        const response = selectResponses.length > 0 ? selectResponses.shift() : undefined;
+        const resolvedValue = typeof response === "function" ? response(lastSelectOptions, lastSelectPrompt) : response;
+
+        if (resolvedValue === undefined) {
+          component.handleInput("\x1b"); // Escape
+        } else if (typeof resolvedValue === "number") {
+          component.handleInput(String(resolvedValue + 1)); // digit key for index
+        } else {
+          const idx = lastSelectOptions.indexOf(resolvedValue);
+          component.handleInput(idx >= 0 ? String(idx + 1) : "\x1b");
+        }
+
+        return resolved ? doneValue : undefined;
+      },
     },
   };
 
@@ -154,6 +197,10 @@ async function createHarness(options = {}) {
     lastSelectPrompt() { return lastSelectPrompt; },
     selectCallCount() { return selectCallCount; },
     home() { return home; },
+    // Exposes `ctx.ui` directly so tests can exercise `ctx.ui.custom()` in isolation
+    // (e.g. to confirm the mock itself behaves correctly) without going through a real
+    // `promptApproval()` call site.
+    ui() { return ctx.ui; },
   };
 }
 
@@ -1220,6 +1267,79 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   assert.equal(result?.message?.customType, "plan-mode-ended-context");
 }
 
+// Mirrors the render()/handleInput() shape of `promptApprovalChoice()` in
+// extensions/index.ts (digit instant-resolve, Up/Down move-with-wrap, Enter resolves
+// highlighted, Escape resolves undefined, "→ " highlight prefix, "N. option" lines) so
+// this test exercises the harness's `ctx.ui.custom()` mock against a realistic factory
+// shape before Task 4 wires the real helper into `promptApproval()`.
+function makeChoiceFactory(title, options) {
+  return (tui, _theme, _kb, done) => {
+    let selectedIndex = 0;
+
+    function handleInput(data) {
+      for (let i = 0; i < options.length && i < 9; i++) {
+        if (data === String(i + 1)) {
+          done(options[i]);
+          return;
+        }
+      }
+      if (data === "\x1b[A") {
+        selectedIndex = (selectedIndex - 1 + options.length) % options.length;
+        tui.requestRender();
+        return;
+      }
+      if (data === "\x1b[B") {
+        selectedIndex = (selectedIndex + 1) % options.length;
+        tui.requestRender();
+        return;
+      }
+      if (data === "\r") {
+        done(options[selectedIndex]);
+        return;
+      }
+      if (data === "\x1b") {
+        done(undefined);
+        return;
+      }
+    }
+
+    function render() {
+      const lines = [...title.split("\n"), ""];
+      options.forEach((opt, i) => {
+        const prefix = i === selectedIndex ? "→ " : "  ";
+        lines.push(`${prefix}${i + 1}. ${opt}`);
+      });
+      lines.push("", "↑↓ select • Enter confirm • 1-9 quick pick • Esc = Deny");
+      return lines;
+    }
+
+    return { render, handleInput };
+  };
+}
+
+async function testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions() {
+  const options = ["Allow once", "Allow for session", "Deny"];
+
+  const digitCase = await createHarness({ selectResponses: [1] });
+  const digitResult = await digitCase.ui().custom(makeChoiceFactory("🔒 bash: rm foo", options));
+  assert.equal(digitResult, "Allow for session", "custom() mock should resolve digit-selected option via real handleInput");
+  assert.equal(digitCase.lastSelectPrompt(), "🔒 bash: rm foo", "custom() mock should reconstruct prompt from render() output");
+  assert.deepEqual(digitCase.lastSelectOptions(), options, "custom() mock should reconstruct options from render() output");
+  assert.equal(digitCase.selectCallCount(), 1, "custom() mock should increment selectCallCount like select()");
+
+  const escapeCase = await createHarness({ selectResponses: [undefined] });
+  const escapeResult = await escapeCase.ui().custom(makeChoiceFactory("🔒 bash: rm foo", options));
+  assert.equal(escapeResult, undefined, "custom() mock should resolve undefined for Escape response");
+
+  const multiLineCase = await createHarness({ selectResponses: [0] });
+  await multiLineCase.ui().custom(makeChoiceFactory("🔒 bash: rm foo\n   ⚠️  DANGEROUS: recursive delete", options));
+  assert.equal(
+    multiLineCase.lastSelectPrompt(),
+    "🔒 bash: rm foo",
+    "custom() mock should take only the first split line of a multi-line title as the prompt",
+  );
+}
+
 (async () => {
   await testStrictModeCanBeSelectedByFlag();
   await testStrictModeCanBeSelectedByConfig();
@@ -1256,6 +1376,7 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   await testDefaultPreapprovedCallsRunWithoutUi();
   await testCyclingThroughPlanDoesNotInjectEndedContext();
   await testLeavingAfterPlanTurnInjectsEndedContext();
+  await testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions();
   console.log("plan-ended-context tests passed");
 })().catch((error) => {
   console.error(error);
