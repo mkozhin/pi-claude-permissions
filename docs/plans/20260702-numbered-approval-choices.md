@@ -252,13 +252,13 @@
 **Files:**
 - Modify: `docs/plans/20260702-numbered-approval-choices.md` if implementation scope changed during execution.
 
-- [ ] Verify all requirements from Overview are implemented: numbered options visible, digit keys instantly resolve, arrows+Enter still work, Escape still means Deny, mode-select dialog untouched.
-- [ ] Verify the `@earendil-works/pi-tui` devDependency resolves correctly and does not affect `npm run pack:dry`'s published file list (it's a devDependency, should not appear in the packed tarball's dependency list — confirm `package.json`'s `dependencies`/`peerDependencies` fields are unaffected).
-- [ ] Run full test suite: `npm run test`.
-- [ ] Run typecheck: `npm run typecheck`.
-- [ ] Run package dry-run: `npm run pack:dry`.
-- [ ] Run whitespace check: `git diff --check`.
-- [ ] Optionally run extension load smoke test: `PI_OFFLINE=1 pi -e ./ --no-context-files --no-session --list-models '__no_such_model__'`.
+- [x] Verify all requirements from Overview are implemented: numbered options visible, digit keys instantly resolve, arrows+Enter still work, Escape still means Deny, mode-select dialog untouched. Confirmed by reading current `extensions/index.ts`: `promptApprovalChoice()` (~line 2680) renders `"${prefix}${i + 1}. ${opt}"` lines (numbered options visible); `handleInput()` checks digit keys 1-9 first via `matchesKey(data, String(i + 1) as KeyId)` and calls `done(options[i])` immediately (instant digit resolve); Up/Down move `selectedIndex` with wrap-around and Enter calls `done(options[selectedIndex])` (arrows+Enter still work); Escape calls `done(undefined)`, and `promptApproval()` (~line 2731) returns `{ block: true, reason: ... }` when `choice` doesn't match `options[0]`/`options[1]` (Escape/Deny still blocks). The mode-select dialog at line 339 (`ctx.ui.select("Select permission mode", options)`) is untouched — still calls `ctx.ui.select`, not `promptApprovalChoice`.
+- [x] Verify the `@earendil-works/pi-tui` devDependency resolves correctly and does not affect `npm run pack:dry`'s published file list. `package.json` has `@earendil-works/pi-tui` only under `devDependencies`; `peerDependencies` still lists only `@earendil-works/pi-coding-agent`. `npm run pack:dry` tarball contents: `LICENSE`, `README.md`, `extensions/index.ts`, `gallery.png`, `package.json` — 5 files total, no `node_modules`/dependency listing affected.
+- [x] Run full test suite: `npm run test`. Passed — "plan-ended-context tests passed".
+- [x] Run typecheck: `npm run typecheck`. Passed with no errors.
+- [x] Run package dry-run: `npm run pack:dry`. Succeeded, produced `mkozhin-pi-claude-permissions-0.1.0.tgz` (107.1 kB), tarball contents as listed above; local tarball artifact removed after inspection.
+- [x] Run whitespace check: `git diff --check`. Passed (exit code 0, no output — working tree was clean at time of check).
+- [x] Optionally run extension load smoke test: `PI_OFFLINE=1 pi -e ./ --no-context-files --no-session --list-models '__no_such_model__'`. Ran successfully — output `No models matching "__no_such_model__"`, no extension load errors.
 
 ### Task 8: [Final] Manual TUI verification and completion
 
