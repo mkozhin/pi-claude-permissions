@@ -179,11 +179,11 @@
 - Modify: `package.json`
 - Modify: `package-lock.json` (if present) or equivalent lockfile
 
-- [ ] Run `npm install --save-dev @earendil-works/pi-tui@^0.79.10` (matches this repo's actual local `@earendil-works/pi-coding-agent@0.79.10` and its own `pi-tui@^0.79.10` dependency — do not use `0.80.3`, that version belongs to an unrelated globally-installed CLI, not this repo's dev tooling).
-- [ ] Verify `node -e "console.log(require.resolve('@earendil-works/pi-tui'))"` succeeds from the repo root.
-- [ ] Verify `node -e "const {Key, matchesKey} = require('@earendil-works/pi-tui'); console.log(typeof Key, typeof matchesKey)"` prints `object function`.
-- [ ] Confirm `npm run typecheck` still passes with the new dependency present (no code changes yet, just confirming the install didn't break anything).
-- [ ] Run tests: `npm run test` — must pass before next task (no behavior change yet).
+- [x] Run `npm install --save-dev @earendil-works/pi-tui@^0.79.10` (matches this repo's actual local `@earendil-works/pi-coding-agent@0.79.10` and its own `pi-tui@^0.79.10` dependency — do not use `0.80.3`, that version belongs to an unrelated globally-installed CLI, not this repo's dev tooling).
+- [x] Verify `node -e "console.log(require.resolve('@earendil-works/pi-tui'))"` succeeds from the repo root.
+- [x] Verify `node -e "const {Key, matchesKey} = require('@earendil-works/pi-tui'); console.log(typeof Key, typeof matchesKey)"` prints `object function`.
+- [x] Confirm `npm run typecheck` still passes with the new dependency present (no code changes yet, just confirming the install didn't break anything).
+- [x] Run tests: `npm run test` — must pass before next task (no behavior change yet).
 
 ### Task 2: Implement `promptApprovalChoice()` custom numbered-choice dialog
 
