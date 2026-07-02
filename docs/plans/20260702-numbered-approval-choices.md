@@ -242,10 +242,10 @@
 - Modify: `README.md`
 - Modify: `CLAUDE.md`
 
-- [ ] Add a short note in `README.md` wherever the confirmation dialog/approval flow is documented: pressing `1`–`9` on the approval dialog instantly picks that option, in addition to arrows+Enter; Escape still means Deny.
-- [ ] Add a short note in `CLAUDE.md` under a relevant existing section (or a new small section) documenting the `promptApprovalChoice()` helper and its digit-key behavior as a project convention, so future permission-check changes that touch `promptApproval()` are aware of it.
-- [ ] Review both diffs to ensure docs match actual implemented behavior (not the sketch in this plan, the real code from Tasks 2-3).
-- [ ] Run `npm run typecheck` — must pass before next task.
+- [x] Add a short note in `README.md` wherever the confirmation dialog/approval flow is documented: pressing `1`–`9` on the approval dialog instantly picks that option, in addition to arrows+Enter; Escape still means Deny. Added a feature bullet plus a new "Approval dialog" section (after the `bypassPermissions` mode, before "Installation for local development").
+- [x] Add a short note in `CLAUDE.md` under a relevant existing section (or a new small section) documenting the `promptApprovalChoice()` helper and its digit-key behavior as a project convention, so future permission-check changes that touch `promptApproval()` are aware of it. Added a bullet under "Permission Enforcement Invariants".
+- [x] Review both diffs to ensure docs match actual implemented behavior (not the sketch in this plan, the real code from Tasks 2-3). Verified against the real `extensions/index.ts` code (`promptApprovalChoice()` ~line 2680, footer hint text, `options` array at ~line 2741 with `"Allow once"` / `"Allow this command for session"` or `"Allow all <tool> for session"` / `"Deny"`) rather than the plan's illustrative sketch.
+- [x] Run `npm run typecheck` — must pass before next task.
 
 ### Task 7: Verify acceptance criteria
 

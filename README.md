@@ -14,6 +14,7 @@ Upstream is preserved as the `upstream` git remote so we can pull fixes later, w
 - Adds `/permissions` for manual mode selection.
 - Adds read-only `plan` mode that injects planning instructions.
 - Keeps always-on safety checks for catastrophic commands and protected paths.
+- Approval confirmation dialogs support numbered quick-pick: press `1`-`9` to instantly choose an option, in addition to the usual arrow keys + Enter.
 
 ## Modes
 
@@ -87,6 +88,17 @@ It also injects visible planning instructions into the next agent turn so the mo
 
 - Allows normal operations without confirmation.
 - Still blocks catastrophic bash and bash/write/edit operations targeting configured protected paths. Direct read/search/list calls are not hard-blocked in this mode.
+
+## Approval dialog
+
+Whenever a tool call needs confirmation, the extension shows a numbered choice dialog (e.g. `1. Allow once`, `2. Allow this command for session` / `Allow all <tool> for session`, `3. Deny`):
+
+- Press `1`-`9` to instantly pick the matching option — no need to press Enter.
+- Arrow Up/Down still moves the highlighted option (with wrap-around), and Enter confirms whichever option is highlighted.
+- `Esc` still means Deny.
+- Digits outside the number of available options are ignored; the dialog stays open.
+
+This applies to approval/confirmation prompts only. The `Select permission mode` picker (`Shift+Tab` / `/permissions`) is unchanged and still uses arrow keys + Enter.
 
 ## Installation for local development
 
