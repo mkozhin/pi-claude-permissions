@@ -1,7 +1,7 @@
 {
   "name": "@mkozhin/pi-claude-permissions",
   "version": "0.1.0",
-  "description": "Personal fork of Claude-style permissions for pi with mode cycling and plan mode.",
+  "description": "Fork of Claude-style permissions for pi with mode cycling and plan mode.",
   "keywords": [
     "pi-package",
     "pi",

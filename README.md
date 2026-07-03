@@ -1,8 +1,8 @@
-# pi-claude-permissions (personal fork)
+# pi-claude-permissions
 
 ![pi-claude-permissions gallery preview](./gallery.png)
 
-Personal fork of [`@zackify/pi-claude-permissions`](https://github.com/zackify/pi-claude-permissions): Claude-style permissions for [pi](https://pi.dev), with configurable mode cycling and built-in plan mode.
+Fork of [`@zackify/pi-claude-permissions`](https://github.com/zackify/pi-claude-permissions): Claude-style permissions for [pi](https://pi.dev), with configurable mode cycling and built-in plan mode.
 
 Upstream is preserved as the `upstream` git remote so we can pull fixes later, while this repo evolves under `@mkozhin/pi-claude-permissions`.
 

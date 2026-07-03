@@ -1,5 +1,5 @@
 /**
- * Personal fork: Opinionated Permissions + Plan Mode for pi
+ * Fork: Opinionated Permissions + Plan Mode for pi
  *
  * Based on zackify/pi-claude-permissions and inspired by rHedBull/pi-permissions,
  * trimmed down for this workflow:
