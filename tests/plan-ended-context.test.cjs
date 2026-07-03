@@ -2,8 +2,19 @@ const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const { join, resolve } = require("node:path");
 const ts = require("typescript");
+// Real KeybindingsManager/TUI_KEYBINDINGS from the same package promptApprovalChoice() itself
+// imports (extensions/index.ts), so the fake `kb` handed to ctx.ui.custom()'s factory in this
+// harness matches() exactly like the host's real KeybindingsManager instance would — including
+// honoring remapped `tui.select.*` user bindings (see createFakeKeybindings below).
+const { KeybindingsManager, TUI_KEYBINDINGS } = require("@earendil-works/pi-tui");
 
 const TEST_HOME = "/tmp/pi-claude-permissions-home";
+
+// userBindings (optional) lets a test remap a `tui.select.*` action (e.g. { "tui.select.confirm": "x" })
+// to prove promptApprovalChoice() honors the real keybindings parameter rather than hard-coded keys.
+function createFakeKeybindings(userBindings) {
+  return new KeybindingsManager(TUI_KEYBINDINGS, userBindings);
+}
 
 function loadExtension(options = {}) {
   const home = options.home ?? TEST_HOME;
@@ -73,6 +84,8 @@ async function createHarness(options = {}) {
   let lastSelectOptions;
   let lastSelectPrompt;
   let selectCallCount = 0;
+  let selectMethodCallCount = 0;
+  let customMethodCallCount = 0;
   let activeTools = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
   const pi = {
@@ -91,6 +104,11 @@ async function createHarness(options = {}) {
 
   const ctx = {
     hasUI: options.hasUI ?? true,
+    // Defaults to "tui" so existing digit/arrow/escape-driven tests keep exercising
+    // `promptApprovalChoice()`'s `ctx.ui.custom()` path unchanged. Pass `mode: "rpc"` (or
+    // any non-"tui" value) to exercise the `ctx.ui.select()` fallback used when the host's
+    // `custom()` isn't a real interactive dialog (see extensions/index.ts's UiContext).
+    mode: options.mode ?? "tui",
     cwd: options.cwd ?? process.cwd(),
     ui: {
       notify() {},
@@ -99,6 +117,7 @@ async function createHarness(options = {}) {
       },
       select(prompt, selectOptions) {
         selectCallCount += 1;
+        selectMethodCallCount += 1;
         lastSelectPrompt = prompt;
         lastSelectOptions = selectOptions;
         const response = selectResponses.length > 0 ? selectResponses.shift() : undefined;
@@ -132,7 +151,7 @@ async function createHarness(options = {}) {
           doneValue = value;
           resolved = true;
         };
-        const component = factory(fakeTui, fakeTheme, {}, done);
+        const component = factory(fakeTui, fakeTheme, createFakeKeybindings(), done);
 
         const lines = component.render(80);
         const blankIndex = lines.findIndex((l) => l.trim() === "");
@@ -141,6 +160,7 @@ async function createHarness(options = {}) {
           .map((l) => l.replace(/^\s+|\s+$/g, ""))
           .filter(Boolean);
         selectCallCount += 1;
+        customMethodCallCount += 1;
         lastSelectPrompt = titleLines.join("\n");
         lastSelectOptions = optionLines
           .map((l) => l.match(/^(?:→\s*)?\d+\.\s(.+)$/))
@@ -209,6 +229,12 @@ async function createHarness(options = {}) {
     lastSelectOptions() { return lastSelectOptions; },
     lastSelectPrompt() { return lastSelectPrompt; },
     selectCallCount() { return selectCallCount; },
+    // Distinguishes which underlying `ctx.ui` method actually resolved the dialog — used to
+    // prove `promptApprovalChoice()`'s TUI-vs-non-TUI routing (`ctx.mode !== "tui"` falls
+    // back to `select()` instead of `custom()`), which `selectCallCount()` alone can't show
+    // since both methods increment it identically.
+    selectMethodCallCount() { return selectMethodCallCount; },
+    customMethodCallCount() { return customMethodCallCount; },
     home() { return home; },
     // Exposes `ctx.ui` directly so tests can exercise `ctx.ui.custom()` in isolation
     // (e.g. to confirm the mock itself behaves correctly) without going through a real
@@ -226,6 +252,101 @@ function assertProtectedPathBlock(result, label) {
   assert.equal(result?.block, true, `${label} should be blocked`);
   assert.match(result.reason, /protected path/i, `${label} should report protected-path safety`);
   assert.match(result.reason, /cannot be overridden/i, `${label} should be non-overridable`);
+}
+
+// Mirrors promptApprovalChoice()'s render()/handleInput() shape; used only to validate the
+// custom() mock itself in testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions below.
+function makeChoiceFactory(title, options) {
+  return (tui, _theme, _kb, done) => {
+    let selectedIndex = 0;
+
+    function handleInput(data) {
+      for (let i = 0; i < options.length && i < 9; i++) {
+        if (data === String(i + 1)) {
+          done(options[i]);
+          return;
+        }
+      }
+      if (data === "\x1b[A") {
+        selectedIndex = (selectedIndex - 1 + options.length) % options.length;
+        tui.requestRender();
+        return;
+      }
+      if (data === "\x1b[B") {
+        selectedIndex = (selectedIndex + 1) % options.length;
+        tui.requestRender();
+        return;
+      }
+      if (data === "\r") {
+        done(options[selectedIndex]);
+        return;
+      }
+      if (data === "\x1b") {
+        done(undefined);
+        return;
+      }
+    }
+
+    function render() {
+      const lines = [...title.split("\n"), ""];
+      options.forEach((opt, i) => {
+        const prefix = i === selectedIndex ? "→ " : "  ";
+        lines.push(`${prefix}${i + 1}. ${opt}`);
+      });
+      lines.push("", "↑↓ select • Enter confirm • 1-9 quick pick • Esc = Deny");
+      return lines;
+    }
+
+    return { render, handleInput };
+  };
+}
+
+// Captures the real promptApprovalChoice() factory (not the makeChoiceFactory() mirror) by
+// temporarily overriding ctx.ui.custom(), drives it via drive(component, probe), then
+// restores the mock and awaits h.toolCall(). probe exposes live counters for asserting
+// intermediate state (e.g. that arrow keys alone never resolve the dialog). `kb` (optional)
+// lets a test pass a KeybindingsManager with remapped user bindings — defaults to real
+// TUI_KEYBINDINGS defaults, same as the host would build at startup.
+async function withRealApprovalComponent(h, toolName, input, drive, kb = createFakeKeybindings()) {
+  const ui = h.ui();
+  const originalCustom = ui.custom;
+  let capturedComponent;
+  let renderRequests = 0;
+  let doneCallCount = 0;
+  let doneValue;
+
+  ui.custom = (factory) =>
+    new Promise((resolvePromise) => {
+      const fakeTui = { requestRender() { renderRequests += 1; } };
+      const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
+      const done = (value) => {
+        doneCallCount += 1;
+        doneValue = value;
+        resolvePromise(value);
+      };
+      capturedComponent = factory(fakeTui, fakeTheme, kb, done);
+      const probe = {
+        getRenderRequests: () => renderRequests,
+        getDoneCallCount: () => doneCallCount,
+        getDoneValue: () => doneValue,
+      };
+      drive(capturedComponent, probe);
+    });
+
+  let result;
+  try {
+    result = await h.toolCall(toolName, input);
+  } finally {
+    ui.custom = originalCustom;
+  }
+
+  return {
+    result,
+    component: capturedComponent,
+    getRenderRequests: () => renderRequests,
+    getDoneCallCount: () => doneCallCount,
+    getDoneValue: () => doneValue,
+  };
 }
 
 async function testStrictModeCanBeSelectedByFlag() {
@@ -1280,56 +1401,6 @@ async function testLeavingAfterPlanTurnInjectsEndedContext() {
   assert.equal(result?.message?.customType, "plan-mode-ended-context");
 }
 
-// Mirrors the render()/handleInput() shape of `promptApprovalChoice()` in
-// extensions/index.ts (digit instant-resolve, Up/Down move-with-wrap, Enter resolves
-// highlighted, Escape resolves undefined, "→ " highlight prefix, "N. option" lines) so
-// this test exercises the harness's `ctx.ui.custom()` mock against a realistic factory
-// shape before Task 4 wires the real helper into `promptApproval()`.
-function makeChoiceFactory(title, options) {
-  return (tui, _theme, _kb, done) => {
-    let selectedIndex = 0;
-
-    function handleInput(data) {
-      for (let i = 0; i < options.length && i < 9; i++) {
-        if (data === String(i + 1)) {
-          done(options[i]);
-          return;
-        }
-      }
-      if (data === "\x1b[A") {
-        selectedIndex = (selectedIndex - 1 + options.length) % options.length;
-        tui.requestRender();
-        return;
-      }
-      if (data === "\x1b[B") {
-        selectedIndex = (selectedIndex + 1) % options.length;
-        tui.requestRender();
-        return;
-      }
-      if (data === "\r") {
-        done(options[selectedIndex]);
-        return;
-      }
-      if (data === "\x1b") {
-        done(undefined);
-        return;
-      }
-    }
-
-    function render() {
-      const lines = [...title.split("\n"), ""];
-      options.forEach((opt, i) => {
-        const prefix = i === selectedIndex ? "→ " : "  ";
-        lines.push(`${prefix}${i + 1}. ${opt}`);
-      });
-      lines.push("", "↑↓ select • Enter confirm • 1-9 quick pick • Esc = Deny");
-      return lines;
-    }
-
-    return { render, handleInput };
-  };
-}
-
 async function testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions() {
   const options = ["Allow once", "Allow for session", "Deny"];
 
@@ -1353,11 +1424,6 @@ async function testUiCustomMockDrivesDigitSelectionAndTracksPromptOptions() {
   );
 }
 
-// Task 5: focused tests for promptApprovalChoice()'s digit/arrow/escape/render-numbering
-// behavior. The harness's `ctx.ui.custom()` mock always drives resolution via real
-// `component.handleInput()` digit-key byte sequences (see createHarness above), so every
-// end-to-end `toolCall()` test already exercises the digit path — this test makes that
-// mapping (digit -> outcome) an explicit, direct assertion instead of an incidental one.
 async function testDigitKeySelectionResolvesCorrespondingOptionOutcome() {
   // digit "1" -> "Allow once": approves this single call, does not persist.
   const allowOnce = await createHarness({ selectResponses: [0] });
@@ -1391,65 +1457,126 @@ async function testDigitKeySelectionResolvesCorrespondingOptionOutcome() {
   assert.equal(deny.selectCallCount(), 1, "digit 3 should resolve from a single prompt");
 }
 
-// Drives a directly-constructed component (via the `makeChoiceFactory()` mirror of
-// `promptApprovalChoice()`, already used by Task 3's mock test) through a raw Up/Down/Enter
-// byte sequence, bypassing the harness's digit-driven `custom()` mock entirely — this is the
-// only way to exercise the non-digit arrow+Enter path end to end.
 async function testArrowNavigationWrapsAndEnterResolvesHighlightedOption() {
-  const options = ["Allow once", "Allow for session", "Deny"];
-  let renderRequests = 0;
-  const fakeTui = { requestRender() { renderRequests += 1; } };
-  const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
-  let doneValue;
-  let resolved = false;
-  const done = (value) => {
-    doneValue = value;
-    resolved = true;
-  };
-  const component = makeChoiceFactory("🔒 write: generated.txt", options)(fakeTui, fakeTheme, {}, done);
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
 
-  // 3 options: Down Down Down wraps 0 -> 1 -> 2 -> 0.
-  component.handleInput("\x1b[B");
-  component.handleInput("\x1b[B");
-  component.handleInput("\x1b[B");
-  assert.equal(resolved, false, "arrow navigation alone must not resolve the dialog");
+  const capture = await withRealApprovalComponent(h, "write", { path: "generated.txt" }, (component, probe) => {
+    // 3 options: Down Down Down wraps 0 -> 1 -> 2 -> 0.
+    component.handleInput("\x1b[B");
+    component.handleInput("\x1b[B");
+    component.handleInput("\x1b[B");
+    assert.equal(probe.getDoneCallCount(), 0, "arrow navigation alone must not resolve the dialog");
 
-  // From index 0, Up wraps backward to the last option (index 2, "Deny").
-  component.handleInput("\x1b[A");
-  assert.equal(resolved, false, "arrow navigation alone must not resolve the dialog");
-  assert.equal(renderRequests, 4, "each arrow keypress should request exactly one re-render");
+    // From index 0, Up wraps backward to the last option (index 2, "Deny").
+    component.handleInput("\x1b[A");
+    assert.equal(probe.getDoneCallCount(), 0, "arrow navigation alone must not resolve the dialog");
+    assert.equal(probe.getRenderRequests(), 4, "each arrow keypress should request exactly one re-render");
 
-  component.handleInput("\r"); // Enter confirms the highlighted option
-  assert.equal(resolved, true, "Enter should resolve the dialog");
-  assert.equal(doneValue, "Deny", "Enter should resolve the option highlighted after the Up/Down sequence");
+    component.handleInput("\r"); // Enter confirms the highlighted option
+    assert.equal(probe.getDoneCallCount(), 1, "Enter should resolve the dialog exactly once");
+  });
+
+  assert.equal(capture.getDoneValue(), "Deny", "Enter should resolve the option highlighted after the Up/Down sequence");
+  assert.equal(capture.result?.block, true, "resolving to the highlighted 'Deny' option should block the write");
+  assert.equal(capture.result?.reason, "User denied write", "Deny should report the standard user-denied reason");
 }
 
-// Proves a digit outside the option range is a pure no-op: the dialog stays open, done() is
-// not called, and later input (Enter) still resolves correctly against the untouched
-// selection state.
 async function testDigitOutsideOptionRangeIsIgnored() {
-  const options = ["Allow once", "Allow for session", "Deny"];
-  const fakeTui = { requestRender() {} };
-  const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
-  let doneValue;
-  let resolved = false;
-  const done = (value) => {
-    doneValue = value;
-    resolved = true;
-  };
-  const component = makeChoiceFactory("🔒 write: generated.txt", options)(fakeTui, fakeTheme, {}, done);
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
 
-  component.handleInput("9"); // out of range for a 3-option dialog
-  assert.equal(resolved, false, "an out-of-range digit must not resolve the dialog");
-  assert.equal(doneValue, undefined, "done() must not be called for an out-of-range digit");
+  const capture = await withRealApprovalComponent(h, "write", { path: "generated.txt" }, (component, probe) => {
+    component.handleInput("9"); // out of range for a 3-option dialog
+    assert.equal(probe.getDoneCallCount(), 0, "an out-of-range digit must not resolve the dialog");
 
-  component.handleInput("\r");
-  assert.equal(resolved, true, "Enter should still resolve normally after an ignored out-of-range digit");
-  assert.equal(doneValue, "Allow once", "the ignored out-of-range digit must not have changed the highlighted selection");
+    component.handleInput("\r");
+    assert.equal(probe.getDoneCallCount(), 1, "Enter should still resolve normally after an ignored out-of-range digit");
+  });
+
+  assert.equal(capture.getDoneValue(), "Allow once", "the ignored out-of-range digit must not have changed the highlighted selection");
+  assert.equal(capture.result, undefined, "resolving to 'Allow once' should not block the write");
 }
 
-// End-to-end: Escape resolves undefined from promptApprovalChoice(), and promptApproval()
-// must treat that exactly like today's ctx.ui.select() cancel — a Deny block.
+// Ctrl+C is part of the host's select() cancel binding (tui.select.cancel = ["escape", "ctrl+c"]).
+async function testCtrlCResolvesUndefinedAndTreatedAsDeny() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const capture = await withRealApprovalComponent(h, "write", { path: "generated.txt" }, (component, probe) => {
+    component.handleInput("\x03"); // Ctrl+C
+    assert.equal(probe.getDoneCallCount(), 1, "Ctrl+C should resolve the dialog exactly once");
+  });
+
+  assert.equal(capture.getDoneValue(), undefined, "Ctrl+C should resolve undefined, matching Escape's cancel contract");
+  assert.equal(capture.result?.block, true, "Ctrl+C should be treated as Deny by promptApproval()");
+  assert.equal(capture.result?.reason, "User denied write", "Ctrl+C denial should report the standard user-denied reason");
+}
+
+// PageUp/PageDown were supported by the host's select() widget; jump to first/last option
+// respectively rather than silently dropping the keys.
+async function testPageUpPageDownJumpToFirstAndLastOption() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const capture = await withRealApprovalComponent(h, "write", { path: "generated.txt" }, (component, probe) => {
+    component.handleInput("\x1b[6~"); // PageDown -> jumps to the last option ("Deny")
+    assert.equal(probe.getDoneCallCount(), 0, "PageDown alone must not resolve the dialog");
+    component.handleInput("\r");
+    assert.equal(probe.getDoneCallCount(), 1);
+  });
+  assert.equal(capture.getDoneValue(), "Deny", "PageDown should highlight the last option");
+
+  const capture2 = await withRealApprovalComponent(h, "write", { path: "generated.txt" }, (component, probe) => {
+    component.handleInput("\x1b[6~"); // PageDown to the last option first
+    component.handleInput("\x1b[5~"); // PageUp -> jumps back to the first option ("Allow once")
+    assert.equal(probe.getDoneCallCount(), 0, "PageUp alone must not resolve the dialog");
+    component.handleInput("\r");
+  });
+  assert.equal(capture2.getDoneValue(), "Allow once", "PageUp should highlight the first option");
+}
+
+// Proves promptApprovalChoice() consults the real `kb` parameter's kb.matches() rather than
+// hard-coded Key.down/Key.enter byte comparisons: with "tui.select.down"/"tui.select.confirm"
+// remapped, the default Down-arrow/Enter bytes must stop working and the remapped keys must work.
+async function testRemappedKeybindingsAreHonoredForNavigationAndConfirm() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const remappedKb = createFakeKeybindings({ "tui.select.down": "n", "tui.select.confirm": "x" });
+  const capture = await withRealApprovalComponent(
+    h,
+    "write",
+    { path: "generated.txt" },
+    (component, probe) => {
+      component.handleInput("\x1b[B"); // default Down arrow must no longer navigate
+      assert.equal(probe.getRenderRequests(), 0, "remapped tui.select.down must not respond to the default Down arrow");
+
+      component.handleInput("n"); // remapped down key
+      assert.equal(probe.getRenderRequests(), 1, "remapped tui.select.down key should navigate");
+
+      component.handleInput("\r"); // default Enter byte must no longer confirm
+      assert.equal(probe.getDoneCallCount(), 0, "remapped tui.select.confirm must not respond to the default Enter key");
+
+      component.handleInput("x"); // remapped confirm key
+      assert.equal(probe.getDoneCallCount(), 1, "remapped tui.select.confirm key should resolve the dialog");
+    },
+    remappedKb,
+  );
+
+  assert.equal(
+    capture.getDoneValue(),
+    "Allow all write for session",
+    "remapped navigation+confirm should resolve the second (session-allow) option",
+  );
+  assert.equal(capture.result, undefined, "Allow-for-session should not block");
+}
+
 async function testEscapeResolvesUndefinedAndTreatedAsDeny() {
   const h = await createHarness({ selectResponses: [undefined] });
   h.setFlag("permission-mode", "default");
@@ -1462,52 +1589,37 @@ async function testEscapeResolvesUndefinedAndTreatedAsDeny() {
   assert.equal(h.selectCallCount(), 1, "Escape should still resolve from a single prompt");
 }
 
-// Regression guard for the core visible feature: the rendered dialog actually contains
-// numbered "N. option" lines with the correct option text.
 async function testRenderedOutputContainsNumberedOptionLines() {
-  const options = ["Allow once", "Allow for session", "Deny"];
-  const fakeTui = { requestRender() {} };
-  const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
-  const component = makeChoiceFactory("🔒 write: generated.txt", options)(fakeTui, fakeTheme, {}, () => {});
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
 
-  const lines = component.render(80);
+  let renderedLines;
+  const capture = await withRealApprovalComponent(h, "write", { path: "generated.txt" }, (component) => {
+    renderedLines = component.render(80);
+    component.handleInput("1"); // resolve so h.toolCall() completes
+  });
+  assert.equal(capture.result, undefined, "Allow once should not block");
 
-  assert.ok(lines.some((line) => line.includes("1. Allow once")), "render output should contain a numbered line for option 1");
-  assert.ok(lines.some((line) => line.includes("2. Allow for session")), "render output should contain a numbered line for option 2");
-  assert.ok(lines.some((line) => line.includes("3. Deny")), "render output should contain a numbered line for option 3");
+  assert.ok(renderedLines.some((line) => line.includes("1. Allow once")), "render output should contain a numbered line for option 1");
+  assert.ok(renderedLines.some((line) => line.includes("2. Allow all write for session")), "render output should contain a numbered line for option 2");
+  assert.ok(renderedLines.some((line) => line.includes("3. Deny")), "render output should contain a numbered line for option 3");
 }
 
-// Drives a *real* dangerous bash command through toolCall() and captures the actual
-// `promptApprovalChoice()` factory from `extensions/index.ts` (not the `makeChoiceFactory()`
-// mirror) by temporarily overriding the harness's `ctx.ui.custom()`. Guards the render bug
-// found in plan review: `describeApprovalRequest()` embeds a real "\n" in the title for
-// dangerous/catastrophic bash commands, and render() must split that into separate line
-// entries rather than pushing one raw multi-line string.
+// describeApprovalRequest() embeds a real "\n" in the title for dangerous/catastrophic bash
+// commands; render() must split that into separate line entries, not one raw multi-line string.
 async function testDangerousBashMultiLineTitleSplitsIntoSeparateRenderLines() {
   const h = await createHarness();
   h.setFlag("permission-mode", "default");
   await h.sessionStart();
 
-  const ui = h.ui();
-  const originalCustom = ui.custom;
   let capturedLines;
-  ui.custom = (factory) =>
-    new Promise((resolvePromise) => {
-      const fakeTui = { requestRender() {} };
-      const fakeTheme = { fg: (_name, text) => text, bold: (text) => text };
-      const component = factory(fakeTui, fakeTheme, {}, resolvePromise);
-      capturedLines = component.render(80);
-      component.handleInput("1"); // Allow once, so promptApproval() completes normally
-    });
+  const capture = await withRealApprovalComponent(h, "bash", { command: "chmod -R 777 /tmp/generated" }, (component) => {
+    capturedLines = component.render(80);
+    component.handleInput("1"); // Allow once, so promptApproval() completes normally
+  });
 
-  let result;
-  try {
-    result = await h.toolCall("bash", { command: "chmod -R 777 /tmp/generated" });
-  } finally {
-    ui.custom = originalCustom;
-  }
-
-  assert.equal(result, undefined, "Allow once should not block the dangerous command");
+  assert.equal(capture.result, undefined, "Allow once should not block the dangerous command");
   assert.ok(capturedLines, "the dangerous bash command should have reached promptApprovalChoice()'s custom() dialog");
   assert.ok(
     capturedLines.some((line) => line.includes("bash: chmod -R 777 /tmp/generated") && !line.includes("DANGEROUS")),
@@ -1521,6 +1633,44 @@ async function testDangerousBashMultiLineTitleSplitsIntoSeparateRenderLines() {
     !capturedLines.some((line) => line.includes("\n")),
     "no single render line should contain an embedded newline — the multi-line title must be split",
   );
+}
+
+// RPC mode's real ctx.ui.custom() is a no-op stub that resolves undefined immediately
+// without consulting the client, so promptApprovalChoice() must fall back to ctx.ui.select()
+// whenever ctx.mode !== "tui" or every RPC approval prompt would be silently auto-denied.
+async function testRpcModeFallsBackToSelectInsteadOfCustom() {
+  const h = await createHarness({ mode: "rpc", selectResponses: [1] });
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const result = await h.toolCall("write", { path: "generated.txt" });
+
+  assert.equal(result, undefined, "digit-2-equivalent select() response (Allow for session) should not block");
+  assert.equal(h.customMethodCallCount(), 0, "RPC mode must never call ctx.ui.custom() for approval prompts");
+  assert.equal(h.selectMethodCallCount(), 1, "RPC mode must resolve the approval prompt via ctx.ui.select()");
+  assert.deepEqual(
+    h.lastSelectOptions(),
+    ["Allow once", "Allow all write for session", "Deny"],
+    "the select() fallback must receive the same options the custom() dialog would have shown",
+  );
+
+  // The session-allow granted above should still suppress a repeat prompt, proving the
+  // select()-fallback path integrates with the rest of promptApproval() unchanged.
+  const repeat = await h.toolCall("write", { path: "generated.txt" });
+  assert.equal(repeat, undefined, "session allow recorded via the select() fallback should suppress a repeat prompt");
+  assert.equal(h.selectMethodCallCount(), 1, "the repeat write should not re-prompt");
+}
+
+async function testTuiModeStillUsesCustomDialog() {
+  const h = await createHarness({ selectResponses: [0] });
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const result = await h.toolCall("write", { path: "generated.txt" });
+
+  assert.equal(result, undefined, "Allow once should not block");
+  assert.equal(h.customMethodCallCount(), 1, "TUI mode must resolve the approval prompt via ctx.ui.custom()");
+  assert.equal(h.selectMethodCallCount(), 0, "TUI mode must never fall back to ctx.ui.select() for approval prompts");
 }
 
 (async () => {
@@ -1563,9 +1713,14 @@ async function testDangerousBashMultiLineTitleSplitsIntoSeparateRenderLines() {
   await testDigitKeySelectionResolvesCorrespondingOptionOutcome();
   await testArrowNavigationWrapsAndEnterResolvesHighlightedOption();
   await testDigitOutsideOptionRangeIsIgnored();
+  await testCtrlCResolvesUndefinedAndTreatedAsDeny();
+  await testPageUpPageDownJumpToFirstAndLastOption();
+  await testRemappedKeybindingsAreHonoredForNavigationAndConfirm();
   await testEscapeResolvesUndefinedAndTreatedAsDeny();
   await testRenderedOutputContainsNumberedOptionLines();
   await testDangerousBashMultiLineTitleSplitsIntoSeparateRenderLines();
+  await testRpcModeFallsBackToSelectInsteadOfCustom();
+  await testTuiModeStillUsesCustomDialog();
   console.log("plan-ended-context tests passed");
 })().catch((error) => {
   console.error(error);

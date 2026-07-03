@@ -94,9 +94,11 @@ It also injects visible planning instructions into the next agent turn so the mo
 Whenever a tool call needs confirmation, the extension shows a numbered choice dialog (e.g. `1. Allow once`, `2. Allow this command for session` / `Allow all <tool> for session`, `3. Deny`):
 
 - Press `1`-`9` to instantly pick the matching option — no need to press Enter.
-- Arrow Up/Down still moves the highlighted option (with wrap-around), and Enter confirms whichever option is highlighted.
-- `Esc` still means Deny.
+- Arrow Up/Down still moves the highlighted option (with wrap-around), PageUp/PageDown jump to the first/last option, and Enter confirms whichever option is highlighted.
+- `Esc` or Ctrl+C still means Deny.
+- Navigation/confirm/cancel honor your configured `tui.select.*` keybindings (same as the host's own select dialog) if you've remapped them; digits 1-9 are always the literal number keys.
 - Digits outside the number of available options are ignored; the dialog stays open.
+- This numbered dialog is a TUI-only enhancement. When the host isn't running in interactive TUI mode (e.g. RPC mode), approval prompts fall back to the host's plain `select()` dialog instead, so non-TUI clients (IDE integrations, automation) can still answer them.
 
 This applies to approval/confirmation prompts only. The `Select permission mode` picker (`Shift+Tab` / `/permissions`) is unchanged and still uses arrow keys + Enter.
 

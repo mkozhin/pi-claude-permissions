@@ -9,8 +9,16 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey } from "@earendil-works/pi-tui";
-import type { KeyId } from "@earendil-works/pi-tui";
+// `@earendil-works/pi-tui` is a devDependency only (no runtime dependency entry) — this is
+// not a packaging bug. Pi's extension loader aliases the `@earendil-works/pi-tui` specifier
+// to its own bundled copy of pi-tui at runtime (both the jiti dev-mode alias map and the
+// compiled-binary VIRTUAL_MODULES map resolve it), so this value import works correctly when
+// the extension actually runs under `pi`, even though npm never installs pi-tui as a
+// dependency of this package. Keep this devDependency's version pinned to match the host's
+// bundled pi-tui version (see CLAUDE.md → Maintainer Workflow) so `Key`/`matchesKey` semantics
+// used here stay identical to what the host's own components use at runtime.
+import { matchesKey } from "@earendil-works/pi-tui";
+import type { KeybindingsManager, KeyId } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
@@ -20,6 +28,8 @@ type Pattern = { pattern: string; description: string };
 type UiContext = {
   ui: any;
   hasUI?: boolean;
+  // Run mode ("tui" | "rpc" | "json" | "print"); only "tui" implements ui.custom() as a real dialog.
+  mode?: string;
   isIdle?: () => boolean;
   hasPendingMessages?: () => boolean;
   cwd?: string;
@@ -2662,28 +2672,28 @@ function findMatch(command: string, patterns: Pattern[]): Pattern | undefined {
   return patterns.find((pattern) => command.includes(pattern.pattern));
 }
 
-/**
- * Renders a numbered approval-choice dialog via `ctx.ui.custom()`, replacing the host's
- * opaque `ctx.ui.select()` widget so digit keys (1-9) can resolve an option instantly,
- * in addition to the usual Up/Down + Enter flow. Returns the chosen option string (must
- * match one of the `options` entries) or `undefined` for cancel/Escape (treated as Deny
- * by callers), matching `ctx.ui.select()`'s existing return contract exactly.
- *
- * Test coverage note: this helper is not separately exported from the module (only the
- * default `permissionExtension` export is), and `tests/plan-ended-context.test.cjs`'s
- * `loadExtension()` only surfaces that default export. Direct standalone unit tests are
- * therefore not possible without changing the module's export surface; coverage is
- * deferred to Task 5, which exercises this helper end-to-end through `promptApproval()`
- * once Task 4 wires it in (digit-key, arrow/Enter, out-of-range digit, Escape, and
- * multi-line-title render cases).
- */
+// Renders a numbered dialog via ctx.ui.custom() so digit keys 1-9 resolve an option
+// instantly (plus Up/Down/PageUp/PageDown/Enter/Escape/Ctrl+C), replacing ctx.ui.select().
+// Falls back to ctx.ui.select() when ctx.mode !== "tui": RPC mode's real ctx.ui.custom() is
+// a no-op stub that resolves undefined immediately without consulting the client, and
+// ctx.hasUI is true under RPC too, so skipping this check would silently auto-deny every
+// approval prompt for RPC-driven clients. Return contract matches ctx.ui.select(): a string
+// from `options`, or undefined for cancel (treated as Deny by callers).
 async function promptApprovalChoice(ctx: UiContext, title: string, options: string[]): Promise<string | undefined> {
+  if (ctx.mode !== "tui") {
+    return ctx.ui.select(title, options);
+  }
+
   // `ctx.ui` is deliberately typed `any` (see UiContext) — the `custom()` call therefore
   // can't accept an explicit `<T>` type argument (TS2347); the `Promise<string | undefined>`
   // return type annotation on this function is what keeps callers type-safe instead.
-  return ctx.ui.custom((tui: any, theme: any, _kb: any, done: (result: string | undefined) => void) => {
+  return ctx.ui.custom((tui: any, theme: any, kb: KeybindingsManager, done: (result: string | undefined) => void) => {
     let selectedIndex = 0;
 
+    // Digit quick-pick is new functionality with no pre-existing keybinding action to honor,
+    // so hard-coding 1-9 here is intentional. Navigation/confirm/cancel below go through the
+    // real `kb.matches()` (same API the host's own SelectList/ExtensionSelectorComponent use)
+    // so users who remapped their `tui.select.*` keybindings are honored here too.
     function handleInput(data: string) {
       for (let i = 0; i < options.length && i < 9; i++) {
         if (matchesKey(data, String(i + 1) as KeyId)) {
@@ -2691,21 +2701,31 @@ async function promptApprovalChoice(ctx: UiContext, title: string, options: stri
           return;
         }
       }
-      if (matchesKey(data, Key.up)) {
+      if (kb.matches(data, "tui.select.up")) {
         selectedIndex = (selectedIndex - 1 + options.length) % options.length;
         tui.requestRender();
         return;
       }
-      if (matchesKey(data, Key.down)) {
+      if (kb.matches(data, "tui.select.down")) {
         selectedIndex = (selectedIndex + 1) % options.length;
         tui.requestRender();
         return;
       }
-      if (matchesKey(data, Key.enter)) {
+      if (kb.matches(data, "tui.select.pageUp")) {
+        selectedIndex = 0;
+        tui.requestRender();
+        return;
+      }
+      if (kb.matches(data, "tui.select.pageDown")) {
+        selectedIndex = options.length - 1;
+        tui.requestRender();
+        return;
+      }
+      if (kb.matches(data, "tui.select.confirm")) {
         done(options[selectedIndex]);
         return;
       }
-      if (matchesKey(data, Key.escape)) {
+      if (kb.matches(data, "tui.select.cancel")) {
         done(undefined);
         return;
       }
