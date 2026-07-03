@@ -265,23 +265,25 @@
 **Files:**
 - Modify: `docs/plans/20260702-numbered-approval-choices.md`
 
-- [x] manual test (skipped - not automatable by subagent; requires human in live pi TUI session) — Perform the manual TUI verification steps listed under Post-Completion below, in a real `pi` session with this extension loaded (e.g. via `pi -e ./`), and record the outcome (pass/fail per step) directly in this plan file before considering it complete.
-- [x] manual test (skipped - not automatable by subagent; requires human in live pi TUI session) — If any manual step fails, treat it as a blocker (`⚠️` prefix), fix, and re-verify — do not mark this task done with a failing manual step.
-- [ ] Move this plan to `docs/plans/completed/` once all automated and manual verification has passed. (Left unchecked: the manual TUI verification above has not actually been performed by a human yet — only a subagent skip-note was recorded. Do not move to completed/ until a human runs the Post-Completion steps and confirms pass/fail in this file.)
+- [x] Perform the manual TUI verification steps listed under Post-Completion below, in a real `pi` session with this extension loaded (via the path-based `packages` entry in `~/.pi/agent/settings.json`, on branch `numbered-approval-choices`). PARTIAL — human confirmed steps 2-5 pass (digit `1`/`2`/`3` instantly resolve, arrows+Enter still work); steps 6-10 (Esc, narrow-terminal wrap, dangerous/catastrophic multi-line render, Kitty vs. legacy terminal protocol, Ctrl+C, PageUp/PageDown, `/reload`) not yet checked — see Post-Completion checklist below for per-step status.
+- [x] If any manual step fails, treat it as a blocker (`⚠️` prefix), fix, and re-verify — do not mark this task done with a failing manual step. No failures reported so far on the steps actually checked; remaining steps still pending, not failing.
+- [ ] Move this plan to `docs/plans/completed/` once all automated and manual verification has passed. (Left unchecked: only steps 2-5 of the Post-Completion checklist have been confirmed by a human so far. Do not move to completed/ until the remaining steps — Esc, narrow terminal, dangerous/catastrophic render, Kitty vs. legacy protocol, Ctrl+C, PageUp/PageDown, `/reload` — are also checked and recorded below.)
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes.*
 
 - **Manual TUI verification (required — headless tests cannot prove real keyboard bytes are caught correctly):**
-  1. Trigger a bash command confirmation in `default` or `strict` mode.
-  2. Press `1` — verify "Allow once" applies instantly, no Enter needed.
-  3. Trigger another confirmation; press `2` — verify "Allow for session" applies instantly.
-  4. Trigger another confirmation; press `3` — verify "Deny" applies instantly.
-  5. Trigger another confirmation; use Up/Down + Enter — verify the arrow-driven flow still works exactly as before.
-  6. Trigger another confirmation; press `Esc` — verify it still means Deny.
-  7. Resize/use a narrow terminal — verify long command descriptions still wrap/display reasonably and the numbered list isn't visually broken.
-  8. Trigger a confirmation for a **dangerous or catastrophic** bash command (e.g. one matching a configured dangerous pattern, or a catastrophic one with `allowCatastrophic` enabled) — verify the multi-line `⚠️ DANGEROUS`/`🚫 CATASTROPHIC` description renders as separate lines correctly (not garbled), and that digit/arrow selection still works on this specific dialog shape.
-  9. Repeat steps 2-6 in **both** a terminal with the Kitty keyboard protocol active and a plain legacy terminal (e.g. a Kitty-protocol terminal like Ghostty/Kitty/WezTerm vs. a legacy one like Terminal.app) — `matchesKey`'s digit/escape handling differs by protocol, and this is exactly the class of bug automated tests cannot catch.
-  10. Run `/reload` (or restart `pi`) after installing the local extension — verify the extension loads without errors.
+  1. [x] Trigger a bash command confirmation in `default` or `strict` mode. — done, as part of steps 2-5 below.
+  2. [x] Press `1` — verify "Allow once" applies instantly, no Enter needed. — **PASS**, confirmed by human 2026-07-03.
+  3. [x] Trigger another confirmation; press `2` — verify "Allow for session" applies instantly. — **PASS**, confirmed by human 2026-07-03.
+  4. [x] Trigger another confirmation; press `3` — verify "Deny" applies instantly. — **PASS**, confirmed by human 2026-07-03.
+  5. [x] Trigger another confirmation; use Up/Down + Enter — verify the arrow-driven flow still works exactly as before. — **PASS**, confirmed by human 2026-07-03.
+  6. [ ] Trigger another confirmation; press `Esc` — verify it still means Deny. — not yet checked.
+  7. [ ] Resize/use a narrow terminal — verify long command descriptions still wrap/display reasonably and the numbered list isn't visually broken. — not yet checked.
+  8. [ ] Trigger a confirmation for a **dangerous or catastrophic** bash command (e.g. one matching a configured dangerous pattern, or a catastrophic one with `allowCatastrophic` enabled) — verify the multi-line `⚠️ DANGEROUS`/`🚫 CATASTROPHIC` description renders as separate lines correctly (not garbled), and that digit/arrow selection still works on this specific dialog shape. — not yet checked.
+  9. [ ] Repeat steps 2-6 in **both** a terminal with the Kitty keyboard protocol active and a plain legacy terminal (e.g. a Kitty-protocol terminal like Ghostty/Kitty/WezTerm vs. a legacy one like Terminal.app) — `matchesKey`'s digit/escape handling differs by protocol, and this is exactly the class of bug automated tests cannot catch. — not yet checked.
+  10. [ ] Press `Ctrl+C` on a confirmation dialog — verify it also resolves to Deny (added during review to restore parity with the old `ctx.ui.select()` widget). — not yet checked.
+  11. [ ] Press `PageUp`/`PageDown` on a confirmation dialog — verify it jumps to the first/last option. — not yet checked.
+  12. [ ] Run `/reload` (or restart `pi`) after installing the local extension — verify the extension loads without errors. — not yet checked.
 - Automated tests and `npm run typecheck` are **not** sufficient evidence that real digit keypresses are caught correctly (Kitty keyboard protocol vs. legacy terminal sequences) — this must be confirmed live, and the result recorded honestly in Task 8, not assumed.
 - If using `pi-powerbar` or other extensions that also drive approval-style confirmations, spot-check they aren't affected (this plan only touches this repo's own `promptApproval()`).
