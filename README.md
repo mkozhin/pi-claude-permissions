@@ -102,9 +102,27 @@ Whenever a tool call needs confirmation, the extension shows a numbered choice d
 
 This applies to approval/confirmation prompts only. The `Select permission mode` picker (`Shift+Tab` / `/permissions`) is unchanged and still uses arrow keys + Enter.
 
-## Installation for local development
+## Installation
 
-From this checkout:
+Install directly from GitHub — no npm account or publishing required:
+
+```bash
+pi install git:github.com/mkozhin/pi-claude-permissions
+```
+
+This clones the repo to `~/.pi/agent/git/github.com/mkozhin/pi-claude-permissions` (or `.pi/git/...` with `-l` for a project-local install) and runs `npm install` automatically. Restart pi or run `/reload` afterward.
+
+Pin to a specific tag or commit if you want a stable, non-moving version:
+
+```bash
+pi install git:github.com/mkozhin/pi-claude-permissions@v0.1.0
+```
+
+Without a pinned ref, `pi update --extensions` (or `pi update --all`) pulls the latest commit on the default branch.
+
+### Local development
+
+Working on this repo itself? Install straight from your checkout:
 
 ```bash
 pi install ./
@@ -116,14 +134,6 @@ For one-off testing without adding it to settings:
 
 ```bash
 pi -e ./
-```
-
-If/when this fork is published or pushed to GitHub, it can also be installed as a normal pi package:
-
-```bash
-pi install git:github.com/mkozhin/pi-claude-permissions
-# or, if published to npm:
-pi install npm:@mkozhin/pi-claude-permissions
 ```
 
 ## Configuration
