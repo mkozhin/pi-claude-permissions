@@ -202,40 +202,45 @@ return lines.map((line) => truncateLineMiddle(line, width));
 - Modify: `extensions/index.ts`
 - Modify: `tests/plan-ended-context.test.cjs`
 
-- [ ] extend the existing `import { matchesKey } from "@earendil-works/pi-tui";` (line 20) to also
+- [x] extend the existing `import { matchesKey } from "@earendil-works/pi-tui";` (line 20) to also
       import `sliceByColumn`, `truncateToWidth`, and `visibleWidth`
-- [ ] add the `truncateLineMiddle` helper directly above `promptApprovalChoice()` (per Technical
+- [x] add the `truncateLineMiddle` helper directly above `promptApprovalChoice()` (per Technical
       Details) — note it now uses `sliceByColumn` for the tail instead of a hand-rolled
       char-slice loop, and guards `maxWidth <= 0` plus the case where the ellipsis itself is
       wider than `maxWidth`
-- [ ] in `render(width)` inside `promptApprovalChoice()` (line 2744), replace `return lines;` with
+- [x] in `render(width)` inside `promptApprovalChoice()` (line 2744), replace `return lines;` with
       `return lines.map((line) => truncateLineMiddle(line, width));`
-- [ ] import `visibleWidth` from `@earendil-works/pi-tui` at the top of
+- [x] import `visibleWidth` from `@earendil-works/pi-tui` at the top of
       `tests/plan-ended-context.test.cjs`, alongside the existing
       `const { KeybindingsManager, TUI_KEYBINDINGS } = require(...)`
-- [ ] write `testRenderTruncatesLongLinesToFitWidth`: via
+- [x] write `testRenderTruncatesLongLinesToFitWidth`: via
       `withRealApprovalComponent(h, "bash", { command: "echo " + "x".repeat(400) }, (component) => {...})`,
       call `component.render(w)` inside the drive callback **for each width in
       `[0, 1, 2, 3, 4, 10, 80]`**, then `component.handleInput("1")` so `h.toolCall()` resolves;
       assert every line returned by every one of those `render(w)` calls has
       `visibleWidth(line) <= w` — this specifically catches the small-width case where a naive
-      implementation still emits a full-width ellipsis wider than `w`
-- [ ] write `testLongBashCommandTruncationPreservesHeadAndTail`: build a command with three
+      implementation still emits a full-width ellipsis wider than `w`. Note: uses
+      `h.setFlag("permission-mode", "strict")` rather than `"default"` — `"echo"` is on the
+      default-mode safe-bash allowlist, so under `"default"` this command would be preapproved
+      without ever reaching `ctx.ui.custom()`; `"strict"` forces confirmation regardless of
+      command content, matching the existing `testStrictPromptsForOrdinaryReadTools` convention.
+- [x] write `testLongBashCommandTruncationPreservesHeadAndTail`: build a command with three
       distinct markers separated by long filler, e.g.
       `"echo START_MARKER_" + "x".repeat(140) + "_MIDDLE_MARKER_" + "x".repeat(140) + "_END_MARKER"`;
       run it through `withRealApprovalComponent` the same way, call `component.render(80)`; assert
       (a) some rendered line contains both `"START_MARKER"` and `"END_MARKER"`, and (b) no rendered
       line contains `"MIDDLE_MARKER"` (proves the middle was actually elided, not that the string
-      happened to fit)
-- [ ] write `testLongEditPathTruncatesToFitWidth`: via
+      happened to fit). Same `"strict"`-mode note as above applies (command also starts with
+      `"echo"`).
+- [x] write `testLongEditPathTruncatesToFitWidth`: via
       `withRealApprovalComponent(h, "edit", { path: "/very/deeply/nested/" + "segment/".repeat(30) + "file.ts" }, (component) => {...})`,
       call `component.render(80)`, assert every line has `visibleWidth(line) <= 80` — this is the
       test that actually backs Task 2's "covered for bash, write, edit, options" claim for a
       non-bash content source (the existing short-string `write`/`edit` tests never exercise
       truncation at all)
-- [ ] add all three new tests' invocations to the IIFE test list at the bottom of the file, after
+- [x] add all three new tests' invocations to the IIFE test list at the bottom of the file, after
       `testTuiModeStillUsesCustomDialog()`
-- [ ] run `npm run test` from `/Users/mkozhin/PycharmProjects/pi-claude-permissions` — all existing
+- [x] run `npm run test` from `/Users/mkozhin/PycharmProjects/pi-claude-permissions` — all existing
       tests plus all three new ones must pass before Task 2
 
 ### Task 2: Verify acceptance criteria

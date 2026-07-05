@@ -6,7 +6,7 @@ const ts = require("typescript");
 // imports (extensions/index.ts), so the fake `kb` handed to ctx.ui.custom()'s factory in this
 // harness matches() exactly like the host's real KeybindingsManager instance would — including
 // honoring remapped `tui.select.*` user bindings (see createFakeKeybindings below).
-const { KeybindingsManager, TUI_KEYBINDINGS } = require("@earendil-works/pi-tui");
+const { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } = require("@earendil-works/pi-tui");
 
 const TEST_HOME = "/tmp/pi-claude-permissions-home";
 
@@ -1673,6 +1673,146 @@ async function testTuiModeStillUsesCustomDialog() {
   assert.equal(h.selectMethodCallCount(), 0, "TUI mode must never fall back to ctx.ui.select() for approval prompts");
 }
 
+// render(width) must truncate every line to fit width, across a range of widths including
+// degenerate ones (0-4) where a naive ellipsis-always-inserted implementation would overflow
+// even though the truncation budget collapses to zero.
+async function testRenderTruncatesLongLinesToFitWidth() {
+  const h = await createHarness();
+  // "strict" mode (not "default") is required here: "echo" is on the default-mode safe-bash
+  // allowlist, so under "default" this command would be preapproved without ever reaching
+  // ctx.ui.custom() — "strict" forces confirmation regardless of command content, which is what
+  // this test needs to exercise render()'s truncation.
+  h.setFlag("permission-mode", "strict");
+  await h.sessionStart();
+
+  const widths = [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 80];
+  const renderedByWidth = {};
+  const capture = await withRealApprovalComponent(h, "bash", { command: "echo " + "x".repeat(400) }, (component) => {
+    for (const w of widths) {
+      renderedByWidth[w] = component.render(w);
+    }
+    component.handleInput("1"); // resolve so h.toolCall() completes
+  });
+  assert.equal(capture.result, undefined, "Allow once should not block");
+
+  for (const w of widths) {
+    // A negative or zero width has no positive-width solution — truncateLineMiddle's
+    // maxWidth <= 0 guard collapses those lines to "" (visibleWidth 0), which is the closest
+    // achievable bound. Math.max(w, 0) captures that without changing the assertion's intent
+    // for every non-degenerate width in the array.
+    const bound = Math.max(w, 0);
+    for (const line of renderedByWidth[w]) {
+      assert.ok(
+        visibleWidth(line) <= bound,
+        `render(${w}) produced a line wider than ${bound}: visibleWidth=${visibleWidth(line)} line=${JSON.stringify(line)}`,
+      );
+    }
+  }
+}
+
+// Proves middle-truncation genuinely elides the middle: a long bash command carries three
+// distinct markers (start, middle, end); the start/end markers must survive in some rendered
+// line while the middle marker must never appear in any rendered line.
+async function testLongBashCommandTruncationPreservesHeadAndTail() {
+  const h = await createHarness();
+  // "strict" mode, for the same reason as testRenderTruncatesLongLinesToFitWidth: this command
+  // starts with "echo" (default-mode safe-bash allowlist), so "default" would preapprove it
+  // without ever reaching ctx.ui.custom().
+  h.setFlag("permission-mode", "strict");
+  await h.sessionStart();
+
+  const command = "echo START_MARKER_" + "x".repeat(140) + "_MIDDLE_MARKER_" + "x".repeat(140) + "_END_MARKER";
+  let capturedLines;
+  const capture = await withRealApprovalComponent(h, "bash", { command }, (component) => {
+    capturedLines = component.render(80);
+    component.handleInput("1"); // resolve so h.toolCall() completes
+  });
+  assert.equal(capture.result, undefined, "Allow once should not block");
+
+  assert.ok(
+    capturedLines.some((line) => line.includes("START_MARKER") && line.includes("END_MARKER")),
+    "some rendered line should preserve both the start and end markers",
+  );
+  assert.ok(
+    !capturedLines.some((line) => line.includes("MIDDLE_MARKER")),
+    "no rendered line should contain the middle marker — it must be elided",
+  );
+}
+
+// Combines the two security-relevant scenarios that the standalone tests each cover only
+// halfway: testDangerousBashMultiLineTitleSplitsIntoSeparateRenderLines uses a short dangerous
+// command that never reaches truncation, and testLongBashCommandTruncationPreservesHeadAndTail
+// uses a plain "echo" command that never matches DEFAULT_DANGEROUS. This test drives a command
+// that actually matches DEFAULT_DANGEROUS ("chmod -R 777"), is long enough to force truncation,
+// and carries head/tail markers — proving describeApprovalRequest()'s two-line "DANGEROUS" title
+// survives render()'s truncation with both the warning and the dangerous command's visible
+// start/end intact.
+async function testDangerousLongBashCommandPreservesWarningAndHeadTail() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const command = "chmod -R 777 START_MARKER_" + "x".repeat(140) + "_END_MARKER";
+  let capturedLines;
+  const capture = await withRealApprovalComponent(h, "bash", { command }, (component) => {
+    capturedLines = component.render(80);
+    component.handleInput("1"); // resolve so h.toolCall() completes
+  });
+  assert.equal(capture.result, undefined, "Allow once should not block");
+
+  for (const line of capturedLines) {
+    assert.ok(
+      visibleWidth(line) <= 80,
+      `render(80) produced a line wider than 80: visibleWidth=${visibleWidth(line)} line=${JSON.stringify(line)}`,
+    );
+  }
+  assert.ok(
+    capturedLines.some((line) => line.includes("START_MARKER") && line.includes("END_MARKER")),
+    "the truncated dangerous command line should preserve both the start and end markers",
+  );
+  assert.ok(
+    capturedLines.some((line) => line.includes("DANGEROUS") && line.includes("insecure recursive permissions")),
+    "the DANGEROUS warning must remain visible as its own line alongside the truncated command",
+  );
+  assert.ok(
+    !capturedLines.some((line) => line.includes("\n")),
+    "no single render line should contain an embedded newline even when the command is truncated",
+  );
+}
+
+// Backs the acceptance claim that truncation covers non-bash content sources too (edit's
+// long `path`), not just bash commands.
+async function testLongEditPathTruncatesToFitWidth() {
+  const h = await createHarness();
+  h.setFlag("permission-mode", "default");
+  await h.sessionStart();
+
+  const path = "/very/deeply/nested/START_HEAD/" + "segment/".repeat(30) + "file.ts";
+  let capturedLines;
+  const capture = await withRealApprovalComponent(h, "edit", { path }, (component) => {
+    capturedLines = component.render(80);
+    component.handleInput("1"); // resolve so h.toolCall() completes
+  });
+  assert.equal(capture.result, undefined, "Allow once should not block");
+
+  for (const line of capturedLines) {
+    assert.ok(
+      visibleWidth(line) <= 80,
+      `render(80) produced a line wider than 80: visibleWidth=${visibleWidth(line)} line=${JSON.stringify(line)}`,
+    );
+  }
+  // Width-only assertions can pass even if truncation silently drops the filename entirely —
+  // mirror the bash sibling test by also asserting the recognizable head and tail survive.
+  assert.ok(
+    capturedLines.some((line) => line.includes("START_HEAD")),
+    "some rendered line should preserve the start of the path",
+  );
+  assert.ok(
+    capturedLines.some((line) => line.includes("file.ts")),
+    "some rendered line should preserve the tail filename",
+  );
+}
+
 (async () => {
   await testStrictModeCanBeSelectedByFlag();
   await testStrictModeCanBeSelectedByConfig();
@@ -1721,6 +1861,10 @@ async function testTuiModeStillUsesCustomDialog() {
   await testDangerousBashMultiLineTitleSplitsIntoSeparateRenderLines();
   await testRpcModeFallsBackToSelectInsteadOfCustom();
   await testTuiModeStillUsesCustomDialog();
+  await testRenderTruncatesLongLinesToFitWidth();
+  await testLongBashCommandTruncationPreservesHeadAndTail();
+  await testDangerousLongBashCommandPreservesWarningAndHeadTail();
+  await testLongEditPathTruncatesToFitWidth();
   console.log("plan-ended-context tests passed");
 })().catch((error) => {
   console.error(error);

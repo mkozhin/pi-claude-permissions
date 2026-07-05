@@ -17,7 +17,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // dependency of this package. Keep this devDependency's version pinned to match the host's
 // bundled pi-tui version (see CLAUDE.md → Maintainer Workflow) so `Key`/`matchesKey` semantics
 // used here stay identical to what the host's own components use at runtime.
-import { matchesKey } from "@earendil-works/pi-tui";
+import { matchesKey, sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { KeybindingsManager, KeyId } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
@@ -2672,6 +2672,42 @@ function findMatch(command: string, patterns: Pattern[]): Pattern | undefined {
   return patterns.find((pattern) => command.includes(pattern.pattern));
 }
 
+// Approval dialogs must not silently hide the end of a long line (e.g. a bash command's
+// dangerous appended suffix) behind a naive tail-cut. Elides the middle instead, keeping both
+// ends visible, sized to the real render width the caller passes in.
+//
+// Uses sliceByColumn() (not a hand-rolled slice) for both head and tail: lines pushed into
+// render()'s output are already ANSI-styled via theme.fg(...) before truncation ever runs, so
+// a byte/char-index slice could cut an escape sequence in half. sliceByColumn() is
+// ANSI/grapheme-column-aware, matching how truncateToWidth() already handles the head.
+function truncateLineMiddle(line: string, maxWidth: number): string {
+  if (maxWidth <= 0) return "";
+  const lineWidth = visibleWidth(line);
+  if (lineWidth <= maxWidth) return line;
+
+  const ellipsis = " … ";
+  const ellipsisWidth = visibleWidth(ellipsis);
+  if (ellipsisWidth >= maxWidth) {
+    // Not enough room for a full ellipsis at this width — shrink it instead of overflowing.
+    return truncateToWidth(ellipsis, maxWidth, "");
+  }
+
+  const budget = maxWidth - ellipsisWidth;
+  const headWidth = Math.ceil(budget * 0.6);
+  const tailWidth = budget - headWidth;
+  const head = truncateToWidth(line, headWidth, "");
+  const tail = sliceByColumn(line, Math.max(0, lineWidth - tailWidth), tailWidth);
+  const truncated = `${head}${ellipsis}${tail}`;
+
+  // sliceByColumn() re-emits whatever ANSI style is active at the tail's start column (so the
+  // tail still renders in the right color) but drops the line's own trailing reset code if it
+  // falls outside the sliced window — the truncated line can then end mid-style, bleeding that
+  // color/attribute into whatever the TUI renders next. Only append when the source line was
+  // actually styled (render() lines are theme.fg()-wrapped); ANSI-free strings must stay
+  // byte-identical for existing tests.
+  return /\x1b\[[0-9;]*m/.test(line) ? `${truncated}\x1b[0m` : truncated;
+}
+
 // Renders a numbered dialog via ctx.ui.custom() so digit keys 1-9 resolve an option
 // instantly (plus Up/Down/PageUp/PageDown/Enter/Escape/Ctrl+C), replacing ctx.ui.select().
 // Falls back to ctx.ui.select() when ctx.mode !== "tui": RPC mode's real ctx.ui.custom() is
@@ -2741,7 +2777,7 @@ async function promptApprovalChoice(ctx: UiContext, title: string, options: stri
         lines.push(`${prefix}${i + 1}. ${opt}`);
       });
       lines.push("", theme.fg("dim", "↑↓ select • Enter confirm • 1-9 quick pick • Esc = Deny"));
-      return lines;
+      return lines.map((line) => truncateLineMiddle(line, width));
     }
 
     return { render, handleInput };
