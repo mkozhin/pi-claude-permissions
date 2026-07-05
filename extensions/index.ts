@@ -15,8 +15,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // compiled-binary VIRTUAL_MODULES map resolve it), so this value import works correctly when
 // the extension actually runs under `pi`, even though npm never installs pi-tui as a
 // dependency of this package. Keep this devDependency's version pinned to match the host's
-// bundled pi-tui version (see CLAUDE.md → Maintainer Workflow) so `Key`/`matchesKey` semantics
-// used here stay identical to what the host's own components use at runtime.
+// bundled pi-tui version (see CLAUDE.md → Maintainer Workflow) so `Key`/`matchesKey` semantics,
+// plus the `sliceByColumn`/`truncateToWidth`/`visibleWidth` ANSI-aware width utilities used by
+// the approval dialog's line truncation, stay identical to what the host's own components use
+// at runtime.
 import { matchesKey, sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { KeybindingsManager, KeyId } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";

@@ -266,19 +266,19 @@ return lines.map((line) => truncateLineMiddle(line, width));
 - Modify: `extensions/index.ts`
 - Modify: `CLAUDE.md`
 
-- [ ] update the import comment block at the top of `extensions/index.ts` (lines 12-19) to mention
+- [x] update the import comment block at the top of `extensions/index.ts` (lines 12-19) to mention
       `sliceByColumn`/`truncateToWidth`/`visibleWidth` alongside `Key`/`matchesKey` as reasons this
       devDependency must stay version-pinned to the host's bundled `pi-tui`
-- [ ] update `CLAUDE.md`'s "Maintainer Workflow" bullet (line 20) the same way — replace "purely
+- [x] update `CLAUDE.md`'s "Maintainer Workflow" bullet (line 20) the same way — replace "purely
       for its `Key`/`matchesKey` exports" with wording that also covers the width-truncation
       utilities (`sliceByColumn`, `truncateToWidth`, `visibleWidth`)
-- [ ] add one brief sentence to the `render()`-related paragraph under "Permission Enforcement
+- [x] add one brief sentence to the `render()`-related paragraph under "Permission Enforcement
       Invariants" (`CLAUDE.md` line 13) noting that `render()` now middle-truncates every line to
       the given width — keep it to one sentence, this documents already-shipped behavior, it isn't
       introducing a new invariant to design around
-- [ ] no README.md change expected — this is an internal robustness fix, not a user-facing feature
-- [ ] run `npm run test` once more to confirm nothing broke from the comment edits
-- [ ] move this plan to `docs/plans/completed/`
+- [x] no README.md change expected — this is an internal robustness fix, not a user-facing feature
+- [x] run `npm run test` once more to confirm nothing broke from the comment edits
+- [x] (deferred to orchestrator's move-plan step)
 
 ## Post-Completion
 
