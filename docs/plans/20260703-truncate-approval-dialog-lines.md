@@ -245,20 +245,20 @@ return lines.map((line) => truncateLineMiddle(line, width));
 
 ### Task 2: Verify acceptance criteria
 
-- [ ] verify `render(width)` truncates every line to fit, across a range of widths including
+- [x] verify `render(width)` truncates every line to fit, across a range of widths including
       degenerate ones (`0`-`4`) — covered by Task 1's first new test
       (`testRenderTruncatesLongLinesToFitWidth`)
-- [ ] verify `render(width)` truncates long content for both `bash` and non-bash tools (`edit`) —
+- [x] verify `render(width)` truncates long content for both `bash` and non-bash tools (`edit`) —
       covered by Task 1's first and third new tests (`testRenderTruncatesLongLinesToFitWidth`,
       `testLongEditPathTruncatesToFitWidth`); short-string existing tests
       (`testDangerousBashMultiLineTitleSplitsIntoSeparateRenderLines`,
       `testRenderedOutputContainsNumberedOptionLines`) confirm truncation stays a no-op when
       content already fits, but do not themselves exercise truncation
-- [ ] verify long bash commands remain legible at both ends after truncation — covered by Task 1's
+- [x] verify long bash commands remain legible at both ends after truncation — covered by Task 1's
       second new test (`testLongBashCommandTruncationPreservesHeadAndTail`)
-- [ ] run full test suite: `npm run test` (from `/Users/mkozhin/PycharmProjects/pi-claude-permissions`)
-- [ ] run `npm run typecheck` (same directory)
-- [ ] run `npm run pack:dry` and `git diff --check` per `CLAUDE.md`'s Maintainer Workflow
+- [x] run full test suite: `npm run test` (from `/Users/mkozhin/PycharmProjects/pi-claude-permissions`)
+- [x] run `npm run typecheck` (same directory)
+- [x] run `npm run pack:dry` and `git diff --check` per `CLAUDE.md`'s Maintainer Workflow
 
 ### Task 3: [Final] Correct stale comments and update documentation
 
